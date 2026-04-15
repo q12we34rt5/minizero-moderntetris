@@ -84,6 +84,11 @@ bool env_hex_use_swap_rule = true;
 bool env_killallgo_use_seki = false;
 int env_rubiks_scramble_rotate = 5;
 int env_surakarta_no_capture_plies = 50;
+int env_modern_tetris_piece_lifetime = 20;
+bool env_modern_tetris_auto_drop = false;
+int env_modern_tetris_num_preview_piece = 5;
+int env_modern_tetris_history_length = 4;
+int env_modern_tetris_max_episode_steps = 5000;
 int env_tetris_block_puzzle_num_holding_block = 3;
 int env_tetris_block_puzzle_num_preview_holding_block = 0;
 
@@ -182,6 +187,12 @@ void setConfiguration(ConfigureLoader& cl)
 #elif KILLALLGO
     cl.addParameter("env_killallgo_ko_rule", env_go_ko_rule, "the ko rules in Killall-Go: positional (only consider stones), situational (consider stones and the turn)", "Environment");
     cl.addParameter("env_killallgo_use_seki", env_killallgo_use_seki, "true for enabling seki", "Environment");
+#elif MODERNTETRIS
+    cl.addParameter("env_modern_tetris_piece_lifetime", env_modern_tetris_piece_lifetime, "the number of actions before the current piece is forced to hard-drop", "Environment");
+    cl.addParameter("env_modern_tetris_auto_drop", env_modern_tetris_auto_drop, "true for enabling one-row gravity after each action", "Environment");
+    cl.addParameter("env_modern_tetris_num_preview_piece", env_modern_tetris_num_preview_piece, "the number of preview pieces exposed in input features", "Environment");
+    cl.addParameter("env_modern_tetris_history_length", env_modern_tetris_history_length, "the number of previous active-piece occupancies kept in the input features", "Environment");
+    cl.addParameter("env_modern_tetris_max_episode_steps", env_modern_tetris_max_episode_steps, "the maximum number of agent actions in one episode", "Environment");
 #elif RUBIKS
     cl.addParameter("env_rubiks_scramble_rotate", env_rubiks_scramble_rotate, "the number random rotations from the initial state of a rubik's cube", "Enviroment");
 #elif SURAKARTA

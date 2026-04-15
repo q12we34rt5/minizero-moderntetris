@@ -72,6 +72,11 @@ typedef minizero::env::linesofaction::LinesOfActionEnvLoader EnvironmentLoader;
 typedef minizero::env::nogo::NoGoAction Action;
 typedef minizero::env::nogo::NoGoEnv Environment;
 typedef minizero::env::nogo::NoGoEnvLoader EnvironmentLoader;
+#elif MODERNTETRIS
+#include "moderntetris.h"
+typedef minizero::env::moderntetris::ModernTetrisAction Action;
+typedef minizero::env::moderntetris::ModernTetrisEnv Environment;
+typedef minizero::env::moderntetris::ModernTetrisEnvLoader EnvironmentLoader;
 #elif OTHELLO
 #include "othello.h"
 typedef minizero::env::othello::OthelloAction Action;
@@ -127,6 +132,8 @@ inline void setUpEnv()
     linesofaction::initialize();
 #elif NOGO
     nogo::initialize();
+#elif MODERNTETRIS
+    moderntetris::initialize();
 #elif TETRISBLOCKPUZZLE
     tetrisblockpuzzle::initialize();
 #endif
@@ -164,6 +171,11 @@ inline void setUpEnv()
     config::env_board_size = 8;
 #elif NOGO
     config::env_board_size = 9;
+#elif MODERNTETRIS
+    config::env_board_size = 10;
+    config::learner_n_step_return = 10;
+    config::zero_actor_intermediate_sequence_length = 400;
+    config::actor_use_random_rotation_features = false;
 #elif TICTACTOE
     config::env_board_size = 3;
 #elif PUZZLE2048

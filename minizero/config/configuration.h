@@ -88,6 +88,11 @@ extern bool env_hex_use_swap_rule;
 extern bool env_killallgo_use_seki;
 extern int env_rubiks_scramble_rotate;
 extern int env_surakarta_no_capture_plies;
+extern int env_modern_tetris_piece_lifetime;
+extern bool env_modern_tetris_auto_drop;
+extern int env_modern_tetris_num_preview_piece;
+extern int env_modern_tetris_history_length;
+extern int env_modern_tetris_max_episode_steps;
 extern int env_tetris_block_puzzle_num_holding_block;
 extern int env_tetris_block_puzzle_num_preview_holding_block;
 
