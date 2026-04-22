@@ -94,9 +94,15 @@ void GumbelZero::sequentialHalving(const std::shared_ptr<MCTS>& mcts)
         candidates_.clear();
         for (int i = 0; i < mcts->getRootNode()->getNumChildren(); ++i) { candidates_.push_back(mcts->getRootNode()->getChild(i)); }
         sort(candidates_.begin(), candidates_.end(), [](const MCTSNode* lhs, const MCTSNode* rhs) { return lhs->getPolicyLogit() > rhs->getPolicyLogit(); });
-        if (static_cast<int>(candidates_.size()) > config::actor_gumbel_sample_size) { candidates_.resize(config::actor_gumbel_sample_size); }
-        sample_size_ = config::actor_gumbel_sample_size;
-        simulation_budget_ = std::max(1.0, std::floor(config::actor_num_simulation / (std::log2(config::actor_gumbel_sample_size) * sample_size_)));
+        // Clamp sample size to actual number of candidates (legal actions may be
+        // fewer than config::actor_gumbel_sample_size, e.g. in placement mode).
+        const int effective_m = std::min(static_cast<int>(candidates_.size()), config::actor_gumbel_sample_size);
+        if (static_cast<int>(candidates_.size()) > effective_m) { candidates_.resize(effective_m); }
+        sample_size_ = effective_m;
+        initial_sample_size_ = effective_m;
+        // Guard log2(m<=1)=0 which would divide by zero.
+        const double log2_m = std::log2(std::max(2, initial_sample_size_));
+        simulation_budget_ = std::max(1.0, std::floor(config::actor_num_simulation / (log2_m * std::max(1, sample_size_))));
     } else {
         bool all_candidates_reach_budget = true;
         for (auto node : candidates_) {
@@ -106,7 +112,8 @@ void GumbelZero::sequentialHalving(const std::shared_ptr<MCTS>& mcts)
         }
 
         if (all_candidates_reach_budget) {
-            int next_budget = std::floor(config::actor_num_simulation / (std::log2(config::actor_gumbel_sample_size) * sample_size_ / 2));
+            const double log2_m = std::log2(std::max(2, initial_sample_size_));
+            int next_budget = std::floor(config::actor_num_simulation / (log2_m * std::max(1, sample_size_) / 2));
             if (next_budget > 0 && sample_size_ > 2) {
                 sample_size_ /= 2;
                 assert(sample_size_ > 0);

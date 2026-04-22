@@ -90,8 +90,9 @@ private:
 private:
     engine::step::Context ctx_;
     std::deque<std::vector<float>> active_piece_history_;
-    int reward_ = 0;
-    int total_reward_ = 0;
+    float reward_ = 0.0f;
+    float total_reward_ = 0.0f;
+    float reward_prev_potential_ = 0.0f;
 };
 
 class ModernTetrisEnvLoader : public StochasticEnvLoader<ModernTetrisAction, ModernTetrisEnv> {

@@ -77,6 +77,11 @@ typedef minizero::env::nogo::NoGoEnvLoader EnvironmentLoader;
 typedef minizero::env::moderntetris::ModernTetrisAction Action;
 typedef minizero::env::moderntetris::ModernTetrisEnv Environment;
 typedef minizero::env::moderntetris::ModernTetrisEnvLoader EnvironmentLoader;
+#elif MODERNTETRIS_PLACEMENT
+#include "moderntetris_placement.h"
+typedef minizero::env::moderntetris_placement::ModernTetrisPlacementAction Action;
+typedef minizero::env::moderntetris_placement::ModernTetrisPlacementEnv Environment;
+typedef minizero::env::moderntetris_placement::ModernTetrisPlacementEnvLoader EnvironmentLoader;
 #elif OTHELLO
 #include "othello.h"
 typedef minizero::env::othello::OthelloAction Action;
@@ -134,6 +139,8 @@ inline void setUpEnv()
     nogo::initialize();
 #elif MODERNTETRIS
     moderntetris::initialize();
+#elif MODERNTETRIS_PLACEMENT
+    moderntetris_placement::initialize();
 #elif TETRISBLOCKPUZZLE
     tetrisblockpuzzle::initialize();
 #endif
@@ -172,6 +179,11 @@ inline void setUpEnv()
 #elif NOGO
     config::env_board_size = 9;
 #elif MODERNTETRIS
+    config::env_board_size = 10;
+    config::learner_n_step_return = 10;
+    config::zero_actor_intermediate_sequence_length = 400;
+    config::actor_use_random_rotation_features = false;
+#elif MODERNTETRIS_PLACEMENT
     config::env_board_size = 10;
     config::learner_n_step_return = 10;
     config::zero_actor_intermediate_sequence_length = 400;

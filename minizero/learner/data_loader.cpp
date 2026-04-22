@@ -5,7 +5,13 @@
 #include "rotation.h"
 #include <algorithm>
 #include <fstream>
+#include <iostream>
+#include <sstream>
+#include <stdexcept>
 #include <utility>
+#if MODERNTETRIS_PLACEMENT
+#include "moderntetris_placement.h"
+#endif
 
 namespace minizero::learner {
 
@@ -124,6 +130,10 @@ bool DataLoaderThread::sampleData()
         setAlphaZeroTrainingData(batch_index);
     } else if (config::nn_type_name == "muzero") {
         setMuZeroTrainingData(batch_index);
+#if MODERNTETRIS_PLACEMENT
+    } else if (config::nn_type_name == "placement_transformer") {
+        setPlacementTrainingData(batch_index);
+#endif
     } else {
         return false; // should not be here
     }
@@ -251,5 +261,135 @@ void DataLoader::updatePriority(int* sampled_index, float* batch_values)
     }
     getSharedData()->replay_buffer_.game_priority_sum_ = std::accumulate(getSharedData()->replay_buffer_.game_priorities_.begin(), getSharedData()->replay_buffer_.game_priorities_.end(), 0.0f);
 }
+
+#if MODERNTETRIS_PLACEMENT
+void DataLoaderThread::setPlacementTrainingData(int batch_index)
+{
+    using namespace minizero::env::moderntetris_placement;
+    std::pair<int, int> p = getSharedData()->replay_buffer_.sampleEnvAndPos();
+    int env_id = p.first, pos = p.second;
+    const EnvironmentLoader& env_loader = getSharedData()->replay_buffer_.env_loaders_[env_id];
+    float loss_scale = getSharedData()->replay_buffer_.getLossScale(p);
+
+    // Replay env up to the sampled position.
+    // CRITICAL: placement env is stochastic (7-bag piece RNG). Without reset(seed)
+    // the replay runs a DIFFERENT piece sequence than self-play -> legal placements
+    // at pos t have different action_ids than those stored in SGF -> dense_policy
+    // lookup returns 0 for every descriptor -> pi_sum=0 -> uniform fallback label.
+    // (Diagnosed via overfit test showing all label top-5 weights = 1/N.)
+    Environment env;
+    env.reset(env_loader.getSeed());
+    for (int i = 0; i < std::min(pos, static_cast<int>(env_loader.getActionPairs().size())); ++i) {
+        env.act(env_loader.getActionPairs()[i].first);
+    }
+
+    // Deterministic ordering: getActionDescriptors() comes from rebuildLegalPlacements()
+    // which calls findPlacements(). The order is fixed by BFS across runs.
+    std::vector<PlacementActionDescriptor> descs = env.getActionDescriptors();
+    const int N = static_cast<int>(descs.size());
+
+    // Fetch dense SGF policy (size = kMaxPlacementActionId), sparse entries non-zero.
+    std::vector<float> dense_policy = env_loader.getPolicy(pos, utils::Rotation::kRotationNone);
+    std::vector<float> value = env_loader.getValue(pos);
+
+    // Shared data ptr.
+    auto dp = getSharedData()->getDataPtr();
+    const int N_max = dp->placement_n_max_;
+    const int preview_size = dp->placement_preview_size_;
+
+    // Per-action numpy buffers are sized [B, N_max]. Writing i in [0, N) with
+    // N > N_max would stomp the next batch slot (silent corruption). Fail loud
+    // so it shows up in training logs instead of as garbage gradients.
+    if (N > N_max) {
+        std::ostringstream oss;
+        oss << "[placement loader] FATAL: legal placement count N=" << N
+            << " exceeds N_max=" << N_max
+            << " at env_id=" << env_id << " pos=" << pos
+            << " (batch_index=" << batch_index << ")."
+            << " Raise kPlacementActionUpperBound in"
+            << " minizero/network/placement_transformer_network.h,"
+            << " placement_n_max() in minizero/learner/pybind.cpp,"
+            << " and placement_n_max_ default in minizero/learner/data_loader.h"
+            << " (all three must match).";
+        std::cerr << oss.str() << std::endl;
+        throw std::runtime_error(oss.str());
+    }
+
+    // Board features [C=1, H, W].
+    const auto board = env.getBoardFeatures();
+    std::copy(board.begin(), board.end(), dp->features_ + board.size() * batch_index);
+
+    // Globals (scalar per batch slot).
+    auto g = env.getGlobalFeatures();
+    auto normalizePiece = [](int p) -> int64_t { return (p < 0 || p >= 7) ? 7 : static_cast<int64_t>(p); };
+    dp->placement_current_piece_[batch_index] = normalizePiece(g.current_piece);
+    dp->placement_hold_piece_[batch_index] = normalizePiece(g.hold_piece);
+    dp->placement_has_held_[batch_index] = g.has_held ? 1.0f : 0.0f;
+    for (int j = 0; j < preview_size; ++j) {
+        int pv = (j < static_cast<int>(g.preview.size())) ? g.preview[j] : -1;
+        dp->placement_preview_[batch_index * preview_size + j] = normalizePiece(pv);
+    }
+    dp->placement_was_rotation_[batch_index] = g.was_rotation ? 1.0f : 0.0f;
+    dp->placement_srs_index_[batch_index] = std::clamp(g.srs_index + 1, 0, 6);
+    dp->placement_lifetime_[batch_index] = 0.0f;
+    dp->placement_combo_[batch_index] = std::clamp((g.combo_count + 1) / 10.0f, 0.0f, 1.0f);
+    dp->placement_back_to_back_[batch_index] = g.back_to_back ? 1.0f : 0.0f;
+    dp->placement_garbage_[batch_index] = std::clamp(g.pending_garbage / 20.0f, 0.0f, 1.0f);
+
+    // Per-action tensors and pi_target (zero-initialized by numpy).
+    const int action_base = batch_index * N_max;
+    float pi_sum = 0.0f;
+    for (int i = 0; i < N; ++i) {
+        const auto& d = descs[i];
+        dp->placement_action_use_hold_[action_base + i] = d.use_hold ? 1 : 0;
+        dp->placement_action_lock_x_[action_base + i] = d.lock_x;
+        dp->placement_action_lock_y_[action_base + i] = d.lock_y;
+        dp->placement_action_orientation_[action_base + i] = d.orientation;
+        dp->placement_action_spin_type_[action_base + i] = d.spin_type;
+        dp->placement_action_piece_type_[action_base + i] = d.piece_type;
+        dp->placement_action_lines_cleared_[action_base + i] = d.lines_cleared;
+        dp->placement_action_mask_[action_base + i] = 0; // valid
+        const float w = (d.action_id >= 0 && d.action_id < static_cast<int>(dense_policy.size())) ? dense_policy[d.action_id] : 0.0f;
+        dp->policy_[action_base + i] = w;
+        pi_sum += w;
+    }
+    // Pad tail: masked = 1, π_target = 0. Action field tails are already zero
+    // from the numpy allocator but reset to be safe.
+    for (int i = N; i < N_max; ++i) {
+        dp->placement_action_use_hold_[action_base + i] = 0;
+        dp->placement_action_lock_x_[action_base + i] = 0;
+        dp->placement_action_lock_y_[action_base + i] = 0;
+        dp->placement_action_orientation_[action_base + i] = 0;
+        dp->placement_action_spin_type_[action_base + i] = 0;
+        dp->placement_action_piece_type_[action_base + i] = 0;
+        dp->placement_action_lines_cleared_[action_base + i] = 0;
+        dp->placement_action_mask_[action_base + i] = 1; // padded
+        dp->policy_[action_base + i] = 0.0f;
+    }
+    // Re-normalize pi_target. pi_sum == 0 means NONE of the current-env's
+    // legal placements matched any action_id stored in the SGF policy. That's
+    // a data-integrity / determinism bug (e.g. missing seed-replay, or BFS
+    // output drifted across runs). Silently falling back to uniform here
+    // previously masked a major bug, so we fail loudly instead.
+    if (pi_sum > 0.0f) {
+        for (int i = 0; i < N; ++i) { dp->policy_[action_base + i] /= pi_sum; }
+    } else {
+        std::cerr << "[placement loader] FATAL: pi_sum == 0 at env_id=" << env_id
+                  << " pos=" << pos << " N=" << N
+                  << " chosen_action_id=" << env_loader.getActionPairs()[pos].first.getActionID()
+                  << ". None of the env's legal placements match any id in the SGF's P[] tag."
+                  << " Likely causes: (1) missing env.reset(seed) before replay,"
+                  << " (2) findPlacements() BFS determinism broke,"
+                  << " (3) hold-branch merge order changed." << std::endl;
+        throw std::runtime_error("placement training: pi_sum == 0");
+    }
+
+    // Value.
+    std::copy(value.begin(), value.end(), dp->value_ + value.size() * batch_index);
+    dp->loss_scale_[batch_index] = loss_scale;
+    dp->sampled_index_[2 * batch_index] = p.first;
+    dp->sampled_index_[2 * batch_index + 1] = p.second;
+}
+#endif
 
 } // namespace minizero::learner

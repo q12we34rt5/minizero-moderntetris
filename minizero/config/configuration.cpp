@@ -69,6 +69,11 @@ int nn_num_blocks = 1;
 int nn_num_hidden_channels = 256;
 int nn_num_value_hidden_channels = 256;
 std::string nn_type_name = "alphazero";
+int nn_placement_d_model = 192;
+int nn_placement_n_layers = 4;
+int nn_placement_n_heads = 6;
+int nn_placement_mlp_ratio = 4;
+float nn_placement_dropout = 0.1f;
 
 // environment parameters
 int env_board_size = 0;
@@ -89,6 +94,24 @@ bool env_modern_tetris_auto_drop = false;
 int env_modern_tetris_num_preview_piece = 5;
 int env_modern_tetris_history_length = 4;
 int env_modern_tetris_max_episode_steps = 5000;
+// Per-lock reward shaping. Defaults are a "moderate" starting point:
+// soft death penalty, small survival bonus, baseline lines_sent attack, plus
+// potential-based shaping on board height and holes. Spin / clear / combo
+// multipliers are zero by default because lines_sent already includes them.
+float env_modern_tetris_reward_survival_bonus = 0.05f;
+float env_modern_tetris_reward_death_penalty = 2.0f;
+float env_modern_tetris_reward_lines_sent_weight = 1.0f;
+float env_modern_tetris_reward_clear_1 = 0.0f;
+float env_modern_tetris_reward_clear_2 = 0.0f;
+float env_modern_tetris_reward_clear_3 = 0.0f;
+float env_modern_tetris_reward_clear_4 = 0.0f;
+float env_modern_tetris_reward_tspin_bonus = 0.0f;
+float env_modern_tetris_reward_tspin_mini_bonus = 0.0f;
+float env_modern_tetris_reward_b2b_bonus = 0.0f;
+float env_modern_tetris_reward_combo_bonus = 0.0f;
+float env_modern_tetris_reward_perfect_clear_bonus = 5.0f;
+float env_modern_tetris_reward_height_weight = 0.02f;
+float env_modern_tetris_reward_hole_weight = 0.1f;
 int env_tetris_block_puzzle_num_holding_block = 3;
 int env_tetris_block_puzzle_num_preview_holding_block = 0;
 
@@ -158,7 +181,12 @@ void setConfiguration(ConfigureLoader& cl)
     cl.addParameter("nn_num_blocks", nn_num_blocks, "hyperparameter for the model; the number of the residual blocks", "Network");                                                  // ref: AGZ
     cl.addParameter("nn_num_hidden_channels", nn_num_hidden_channels, "hyperparameter for the model; the size of the hidden channels in residual blocks", "Network");               // ref: AGZ
     cl.addParameter("nn_num_value_hidden_channels", nn_num_value_hidden_channels, "hyperparameter for the model; the size of the hidden channels in the value network", "Network"); // ref: AGZ
-    cl.addParameter("nn_type_name", nn_type_name, "the type of training algorithm and network: alphazero/muzero", "Network");
+    cl.addParameter("nn_type_name", nn_type_name, "the type of training algorithm and network: alphazero/muzero/placement_transformer", "Network");
+    cl.addParameter("nn_placement_d_model", nn_placement_d_model, "placement transformer: hidden dim", "Network");
+    cl.addParameter("nn_placement_n_layers", nn_placement_n_layers, "placement transformer: number of encoder layers", "Network");
+    cl.addParameter("nn_placement_n_heads", nn_placement_n_heads, "placement transformer: number of attention heads", "Network");
+    cl.addParameter("nn_placement_mlp_ratio", nn_placement_mlp_ratio, "placement transformer: FFN expansion ratio", "Network");
+    cl.addParameter("nn_placement_dropout", nn_placement_dropout, "placement transformer: dropout", "Network");
 
     // environment parameters
     cl.addParameter("env_board_size", env_board_size, "the size of board", "Environment");
@@ -188,11 +216,9 @@ void setConfiguration(ConfigureLoader& cl)
     cl.addParameter("env_killallgo_ko_rule", env_go_ko_rule, "the ko rules in Killall-Go: positional (only consider stones), situational (consider stones and the turn)", "Environment");
     cl.addParameter("env_killallgo_use_seki", env_killallgo_use_seki, "true for enabling seki", "Environment");
 #elif MODERNTETRIS
-    cl.addParameter("env_modern_tetris_piece_lifetime", env_modern_tetris_piece_lifetime, "the number of actions before the current piece is forced to hard-drop", "Environment");
-    cl.addParameter("env_modern_tetris_auto_drop", env_modern_tetris_auto_drop, "true for enabling one-row gravity after each action", "Environment");
-    cl.addParameter("env_modern_tetris_num_preview_piece", env_modern_tetris_num_preview_piece, "the number of preview pieces exposed in input features", "Environment");
-    cl.addParameter("env_modern_tetris_history_length", env_modern_tetris_history_length, "the number of previous active-piece occupancies kept in the input features", "Environment");
-    cl.addParameter("env_modern_tetris_max_episode_steps", env_modern_tetris_max_episode_steps, "the maximum number of agent actions in one episode", "Environment");
+#define MODERNTETRIS_CONFIG_REGISTRATION 1
+#elif MODERNTETRIS_PLACEMENT
+#define MODERNTETRIS_CONFIG_REGISTRATION 1
 #elif RUBIKS
     cl.addParameter("env_rubiks_scramble_rotate", env_rubiks_scramble_rotate, "the number random rotations from the initial state of a rubik's cube", "Enviroment");
 #elif SURAKARTA
@@ -200,6 +226,28 @@ void setConfiguration(ConfigureLoader& cl)
 #elif TETRISBLOCKPUZZLE
     cl.addParameter("env_tetris_block_puzzle_num_holding_block", env_tetris_block_puzzle_num_holding_block, "number of holding block", "Environment");
     cl.addParameter("env_tetris_block_puzzle_num_preview_holding_block", env_tetris_block_puzzle_num_preview_holding_block, "number of preview holding block", "Environment");
+#endif
+
+#ifdef MODERNTETRIS_CONFIG_REGISTRATION
+    cl.addParameter("env_modern_tetris_piece_lifetime", env_modern_tetris_piece_lifetime, "the number of actions before the current piece is forced to hard-drop", "Environment");
+    cl.addParameter("env_modern_tetris_auto_drop", env_modern_tetris_auto_drop, "true for enabling one-row gravity after each action", "Environment");
+    cl.addParameter("env_modern_tetris_num_preview_piece", env_modern_tetris_num_preview_piece, "the number of preview pieces exposed in input features", "Environment");
+    cl.addParameter("env_modern_tetris_history_length", env_modern_tetris_history_length, "the number of previous active-piece occupancies kept in the input features", "Environment");
+    cl.addParameter("env_modern_tetris_max_episode_steps", env_modern_tetris_max_episode_steps, "the maximum number of agent actions in one episode", "Environment");
+    cl.addParameter("env_modern_tetris_reward_survival_bonus", env_modern_tetris_reward_survival_bonus, "reward shaping: bonus added for each lock that does not kill", "Environment");
+    cl.addParameter("env_modern_tetris_reward_death_penalty", env_modern_tetris_reward_death_penalty, "reward shaping: positive value subtracted when the lock kills the piece", "Environment");
+    cl.addParameter("env_modern_tetris_reward_lines_sent_weight", env_modern_tetris_reward_lines_sent_weight, "reward shaping: multiplier for engine-computed lines_sent (the canonical attack value)", "Environment");
+    cl.addParameter("env_modern_tetris_reward_clear_1", env_modern_tetris_reward_clear_1, "reward shaping: extra bonus for a single-line clear (on top of lines_sent)", "Environment");
+    cl.addParameter("env_modern_tetris_reward_clear_2", env_modern_tetris_reward_clear_2, "reward shaping: extra bonus for a double clear", "Environment");
+    cl.addParameter("env_modern_tetris_reward_clear_3", env_modern_tetris_reward_clear_3, "reward shaping: extra bonus for a triple clear", "Environment");
+    cl.addParameter("env_modern_tetris_reward_clear_4", env_modern_tetris_reward_clear_4, "reward shaping: extra bonus for a tetris clear", "Environment");
+    cl.addParameter("env_modern_tetris_reward_tspin_bonus", env_modern_tetris_reward_tspin_bonus, "reward shaping: extra bonus when a line clear comes with a T-spin", "Environment");
+    cl.addParameter("env_modern_tetris_reward_tspin_mini_bonus", env_modern_tetris_reward_tspin_mini_bonus, "reward shaping: extra bonus when a line clear comes with a T-spin mini", "Environment");
+    cl.addParameter("env_modern_tetris_reward_b2b_bonus", env_modern_tetris_reward_b2b_bonus, "reward shaping: flat bonus when a back-to-back streak is active on clear", "Environment");
+    cl.addParameter("env_modern_tetris_reward_combo_bonus", env_modern_tetris_reward_combo_bonus, "reward shaping: bonus multiplied by combo_count on clear", "Environment");
+    cl.addParameter("env_modern_tetris_reward_perfect_clear_bonus", env_modern_tetris_reward_perfect_clear_bonus, "reward shaping: bonus when the lock results in a perfect clear", "Environment");
+    cl.addParameter("env_modern_tetris_reward_height_weight", env_modern_tetris_reward_height_weight, "potential shaping: weight for sum of column heights (lower = better)", "Environment");
+    cl.addParameter("env_modern_tetris_reward_hole_weight", env_modern_tetris_reward_hole_weight, "potential shaping: weight for hole count (lower = better)", "Environment");
 #endif
 
     // references

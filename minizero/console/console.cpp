@@ -4,6 +4,10 @@
 #include "create_network.h"
 #include "sgf_loader.h"
 #include "time_system.h"
+#if MODERNTETRIS_PLACEMENT
+#include "moderntetris_placement.h"
+#include "placement_transformer_network.h"
+#endif
 #include <algorithm>
 #include <climits>
 #include <iomanip>
@@ -61,6 +65,19 @@ void Console::initialize()
             for (int j = 0; j < config::actor_mcts_think_batch_size; ++j) { muzero_network->pushBackInitialData(actor_->getEnvironment().getFeatures()); }
             muzero_network->initialInference();
         }
+#if MODERNTETRIS_PLACEMENT
+    } else if (network_->getNetworkTypeName() == "placement_transformer") {
+        using namespace minizero::env::moderntetris_placement;
+        auto placement_network = std::static_pointer_cast<network::PlacementTransformerNetwork>(network_);
+        for (int i = 0; i < num_warmup_forward; ++i) {
+            for (int j = 0; j < config::actor_mcts_think_batch_size; ++j) {
+                placement_network->pushBack(network::buildPlacementNetworkInput(
+                    actor_->getEnvironment(), kPlacementBoardChannels,
+                    kModernTetrisPlacementBoardHeight, kModernTetrisPlacementBoardWidth));
+            }
+            placement_network->forward();
+        }
+#endif
     } else {
         assert(false); // should not be here
     }
@@ -285,6 +302,18 @@ void Console::calculatePolicyValue(std::vector<float>& policy, float& value, uti
         std::shared_ptr<minizero::network::MuZeroNetworkOutput> zero_output = std::static_pointer_cast<minizero::network::MuZeroNetworkOutput>(network_output);
         policy = zero_output->policy_;
         value = zero_output->value_;
+#if MODERNTETRIS_PLACEMENT
+    } else if (network_->getNetworkTypeName() == "placement_transformer") {
+        using namespace minizero::env::moderntetris_placement;
+        auto placement_network = std::static_pointer_cast<network::PlacementTransformerNetwork>(network_);
+        int index = placement_network->pushBack(network::buildPlacementNetworkInput(
+            actor_->getEnvironment(), kPlacementBoardChannels,
+            kModernTetrisPlacementBoardHeight, kModernTetrisPlacementBoardWidth));
+        auto network_output = placement_network->forward()[index];
+        auto zero_output = std::static_pointer_cast<network::PlacementNetworkOutput>(network_output);
+        policy = zero_output->policy_; // length N (legal placements), not fixed action_size
+        value = zero_output->value_;
+#endif
     } else {
         assert(false); // should not be here
     }

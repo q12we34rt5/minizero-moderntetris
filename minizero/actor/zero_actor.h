@@ -5,6 +5,9 @@
 #include "gumbel_zero.h"
 #include "mcts.h"
 #include "muzero_network.h"
+#if MODERNTETRIS_PLACEMENT
+#include "placement_transformer_network.h"
+#endif
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -28,6 +31,9 @@ public:
     {
         alphazero_network_ = nullptr;
         muzero_network_ = nullptr;
+#if MODERNTETRIS_PLACEMENT
+        placement_network_ = nullptr;
+#endif
     }
 
     void reset() override;
@@ -58,6 +64,9 @@ protected:
 
     std::vector<MCTS::ActionCandidate> calculateAlphaZeroActionPolicy(const Environment& env_transition, const std::shared_ptr<network::AlphaZeroNetworkOutput>& alphazero_output, const utils::Rotation& rotation);
     std::vector<MCTS::ActionCandidate> calculateMuZeroActionPolicy(MCTSNode* leaf_node, const std::shared_ptr<network::MuZeroNetworkOutput>& muzero_output);
+#if MODERNTETRIS_PLACEMENT
+    std::vector<MCTS::ActionCandidate> calculatePlacementActionPolicy(const Environment& env_transition, const std::shared_ptr<network::PlacementNetworkOutput>& placement_output);
+#endif
     virtual Environment getEnvironmentTransition(const std::vector<MCTSNode*>& node_path);
 
     bool enable_resign_;
@@ -67,6 +76,9 @@ protected:
     utils::Rotation feature_rotation_;
     std::shared_ptr<network::AlphaZeroNetwork> alphazero_network_;
     std::shared_ptr<network::MuZeroNetwork> muzero_network_;
+#if MODERNTETRIS_PLACEMENT
+    std::shared_ptr<network::PlacementTransformerNetwork> placement_network_;
+#endif
 };
 
 } // namespace minizero::actor

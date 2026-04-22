@@ -29,6 +29,32 @@ public:
     float* reward_;
     float* loss_scale_;
     int* sampled_index_;
+
+#if MODERNTETRIS_PLACEMENT
+    // Placement training buffers. `features_` holds board features [B,1,H,W];
+    // `policy_` holds padded pi_target [B, N_max]; `value_` / `loss_scale_` /
+    // `sampled_index_` are reused as in AlphaZero.
+    int64_t* placement_current_piece_ = nullptr;   // [B]
+    int64_t* placement_hold_piece_ = nullptr;      // [B]
+    float* placement_has_held_ = nullptr;          // [B]
+    int64_t* placement_preview_ = nullptr;         // [B * preview_size]
+    float* placement_was_rotation_ = nullptr;      // [B]
+    int64_t* placement_srs_index_ = nullptr;       // [B]
+    float* placement_lifetime_ = nullptr;          // [B]
+    float* placement_combo_ = nullptr;             // [B]
+    float* placement_back_to_back_ = nullptr;      // [B]
+    float* placement_garbage_ = nullptr;           // [B]
+    int64_t* placement_action_use_hold_ = nullptr; // [B * N_max]
+    int64_t* placement_action_lock_x_ = nullptr;
+    int64_t* placement_action_lock_y_ = nullptr;
+    int64_t* placement_action_orientation_ = nullptr;
+    int64_t* placement_action_spin_type_ = nullptr;
+    int64_t* placement_action_piece_type_ = nullptr;
+    int64_t* placement_action_lines_cleared_ = nullptr;
+    uint8_t* placement_action_mask_ = nullptr; // [B * N_max], 1 = padded
+    int placement_n_max_ = 256;
+    int placement_preview_size_ = 5;
+#endif
 };
 
 class ReplayBuffer {
@@ -78,6 +104,9 @@ protected:
 
     virtual void setAlphaZeroTrainingData(int batch_index);
     virtual void setMuZeroTrainingData(int batch_index);
+#if MODERNTETRIS_PLACEMENT
+    virtual void setPlacementTrainingData(int batch_index);
+#endif
 
     inline std::shared_ptr<DataLoaderSharedData> getSharedData() { return std::static_pointer_cast<DataLoaderSharedData>(shared_data_); }
 };

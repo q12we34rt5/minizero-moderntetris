@@ -7,6 +7,9 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+#if MODERNTETRIS_PLACEMENT
+#include "moderntetris_placement.h"
+#endif
 
 namespace minizero::actor {
 
@@ -55,6 +58,16 @@ void ZeroActor::beforeNNEvaluation()
         Environment env_transition = getEnvironmentTransition(mcts_search_data_.node_path_);
         feature_rotation_ = config::actor_use_random_rotation_features ? static_cast<utils::Rotation>(utils::Random::randInt() % static_cast<int>(utils::Rotation::kRotateSize)) : utils::Rotation::kRotationNone;
         nn_evaluation_batch_id_ = alphazero_network_->pushBack(env_transition.getFeatures(feature_rotation_));
+#if MODERNTETRIS_PLACEMENT
+    } else if (placement_network_) {
+        Environment env_transition = getEnvironmentTransition(mcts_search_data_.node_path_);
+        feature_rotation_ = utils::Rotation::kRotationNone;
+        using namespace minizero::env::moderntetris_placement;
+        auto in = network::buildPlacementNetworkInput(
+            env_transition, kPlacementBoardChannels,
+            kModernTetrisPlacementBoardHeight, kModernTetrisPlacementBoardWidth);
+        nn_evaluation_batch_id_ = placement_network_->pushBack(std::move(in));
+#endif
     } else if (muzero_network_) {
         if (getMCTS()->getNumSimulation() == 0) { // initial inference for root node
             nn_evaluation_batch_id_ = muzero_network_->pushBackInitialData(env_.getFeatures());
@@ -84,6 +97,17 @@ void ZeroActor::afterNNEvaluation(const std::shared_ptr<NetworkOutput>& network_
         } else {
             getMCTS()->backup(node_path, env_transition.getEvalScore(), env_transition.getReward());
         }
+#if MODERNTETRIS_PLACEMENT
+    } else if (placement_network_) {
+        Environment env_transition = getEnvironmentTransition(node_path);
+        if (!env_transition.isTerminal()) {
+            auto placement_output = std::static_pointer_cast<PlacementNetworkOutput>(network_output);
+            getMCTS()->expand(leaf_node, calculatePlacementActionPolicy(env_transition, placement_output));
+            getMCTS()->backup(node_path, placement_output->value_, env_transition.getReward());
+        } else {
+            getMCTS()->backup(node_path, env_transition.getEvalScore(), env_transition.getReward());
+        }
+#endif
     } else if (muzero_network_) {
         std::shared_ptr<MuZeroNetworkOutput> muzero_output = std::static_pointer_cast<MuZeroNetworkOutput>(network_output);
         getMCTS()->expand(leaf_node, calculateMuZeroActionPolicy(leaf_node, muzero_output));
@@ -102,14 +126,20 @@ void ZeroActor::setNetwork(const std::shared_ptr<network::Network>& network)
     assert(network);
     alphazero_network_ = nullptr;
     muzero_network_ = nullptr;
+#if MODERNTETRIS_PLACEMENT
+    placement_network_ = nullptr;
+#endif
     if (network->getNetworkTypeName() == "alphazero") {
         alphazero_network_ = std::static_pointer_cast<AlphaZeroNetwork>(network);
     } else if (network->getNetworkTypeName() == "muzero" || network->getNetworkTypeName() == "muzero_atari") {
         muzero_network_ = std::static_pointer_cast<MuZeroNetwork>(network);
+#if MODERNTETRIS_PLACEMENT
+    } else if (network->getNetworkTypeName() == "placement_transformer") {
+        placement_network_ = std::static_pointer_cast<PlacementTransformerNetwork>(network);
+#endif
     } else {
         assert(false);
     }
-    assert((alphazero_network_ && !muzero_network_) || (!alphazero_network_ && muzero_network_));
 }
 
 std::vector<std::pair<std::string, std::string>> ZeroActor::getActionInfo() const
@@ -128,11 +158,19 @@ std::string ZeroActor::getEnvReward() const
 
 void ZeroActor::step()
 {
+#if MODERNTETRIS_PLACEMENT
+    assert(alphazero_network_ || muzero_network_ || placement_network_);
+#else
     assert(alphazero_network_ || muzero_network_);
+#endif
     int num_simulation = getMCTS()->getNumSimulation();
     int num_simulation_left = config::actor_num_simulation + 1 - num_simulation;
+    bool direct_inference = alphazero_network_ || num_simulation > 0;
+#if MODERNTETRIS_PLACEMENT
+    direct_inference = direct_inference || placement_network_;
+#endif
     int batch_size = std::min(config::actor_mcts_think_batch_size,
-                              (alphazero_network_ || num_simulation > 0) ? num_simulation_left : 1 /* initial inference for root node */);
+                              direct_inference ? num_simulation_left : 1 /* initial inference for root node */);
     assert(batch_size > 0);
 
     std::vector<std::tuple<int, utils::Rotation, decltype(mcts_search_data_.node_path_)>> batch_queries; // batch id, rotation, search path
@@ -144,8 +182,16 @@ void ZeroActor::step()
         }
         for (auto node : mcts_search_data_.node_path_) { node->addVirtualLoss(); }
     }
-    auto network_output = alphazero_network_ ? alphazero_network_->forward()
-                                             : (num_simulation == 0 ? muzero_network_->initialInference() : muzero_network_->recurrentInference());
+    std::vector<std::shared_ptr<network::NetworkOutput>> network_output;
+    if (alphazero_network_) {
+        network_output = alphazero_network_->forward();
+#if MODERNTETRIS_PLACEMENT
+    } else if (placement_network_) {
+        network_output = placement_network_->forward();
+#endif
+    } else {
+        network_output = (num_simulation == 0 ? muzero_network_->initialInference() : muzero_network_->recurrentInference());
+    }
     for (auto& query : batch_queries) {
         nn_evaluation_batch_id_ = std::get<0>(query);
         feature_rotation_ = std::get<1>(query);
@@ -227,6 +273,26 @@ std::vector<MCTS::ActionCandidate> ZeroActor::calculateAlphaZeroActionPolicy(con
     });
     return action_candidates;
 }
+
+#if MODERNTETRIS_PLACEMENT
+std::vector<MCTS::ActionCandidate> ZeroActor::calculatePlacementActionPolicy(const Environment& env_transition, const std::shared_ptr<network::PlacementNetworkOutput>& placement_output)
+{
+    assert(placement_network_);
+    // Env's legal actions and the placement network's policy output are
+    // aligned in index: policy_[i] corresponds to legal[i]. No mask / filter needed.
+    auto legal = env_transition.getLegalActions();
+    assert(legal.size() == placement_output->policy_.size());
+    std::vector<MCTS::ActionCandidate> candidates;
+    candidates.reserve(legal.size());
+    for (size_t i = 0; i < legal.size(); ++i) {
+        candidates.emplace_back(legal[i], placement_output->policy_[i], placement_output->policy_logits_[i]);
+    }
+    sort(candidates.begin(), candidates.end(), [](const MCTS::ActionCandidate& lhs, const MCTS::ActionCandidate& rhs) {
+        return lhs.policy_ > rhs.policy_;
+    });
+    return candidates;
+}
+#endif
 
 std::vector<MCTS::ActionCandidate> ZeroActor::calculateMuZeroActionPolicy(MCTSNode* leaf_node, const std::shared_ptr<network::MuZeroNetworkOutput>& muzero_output)
 {

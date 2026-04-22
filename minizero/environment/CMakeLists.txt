@@ -26,6 +26,7 @@ target_include_directories(
     tictactoe
     stochastic
     stochastic/moderntetris
+    stochastic/moderntetris_placement
     stochastic/puzzle2048
     stochastic/tetrisblockpuzzle
 )

@@ -110,6 +110,11 @@ void SlaveThread::doGPUJob()
         } else if (muzero_network->getRecurrentInputBatchSize() > 0) {
             getSharedData()->network_outputs_[id_] = std::static_pointer_cast<MuZeroNetwork>(network)->recurrentInference();
         }
+#if MODERNTETRIS_PLACEMENT
+    } else if (network->getNetworkTypeName() == "placement_transformer") {
+        auto placement_network = std::static_pointer_cast<PlacementTransformerNetwork>(network);
+        if (placement_network->getBatchSize() > 0) { getSharedData()->network_outputs_[id_] = placement_network->forward(); }
+#endif
     }
 }
 

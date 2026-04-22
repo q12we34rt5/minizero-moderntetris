@@ -17,6 +17,7 @@ public:
 
 private:
     int sample_size_;
+    int initial_sample_size_ = 0; // effective m at phase 0 = min(N, config::actor_gumbel_sample_size)
     int simulation_budget_;
     std::vector<MCTSNode*> candidates_;
 };

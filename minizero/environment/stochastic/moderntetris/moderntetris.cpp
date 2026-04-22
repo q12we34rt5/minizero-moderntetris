@@ -1,6 +1,7 @@
 #include "moderntetris.h"
 #include "configuration.h"
 #include "random.h"
+#include "reward_common.h"
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -13,7 +14,6 @@ using namespace minizero::utils;
 namespace {
 
     constexpr int kVisibleCellCount = kModernTetrisBoardWidth * kModernTetrisBoardHeight;
-    constexpr int kDeathPenalty = 20;
 
     std::string normalizeToken(std::string token)
     {
@@ -76,8 +76,9 @@ void ModernTetrisEnv::reset(int seed)
     actions_.clear();
     events_.clear();
     observations_.clear();
-    reward_ = 0;
-    total_reward_ = 0;
+    reward_ = 0.0f;
+    total_reward_ = 0.0f;
+    reward_prev_potential_ = 0.0f;
 
     engine::step::Config step_config;
     step_config.piece_life = std::max(1, config::env_modern_tetris_piece_lifetime);
@@ -106,8 +107,26 @@ bool ModernTetrisEnv::act(const ModernTetrisAction& action, bool with_chance /* 
     }
 
     actions_.push_back(action);
-    reward_ = static_cast<int>(ctx_.state.lines_sent);
-    if (!ctx_.state.is_alive) { reward_ -= kDeathPenalty; }
+    {
+        // Reward shaping: only fire at lock events. For step-level env, most
+        // steps are navigation (move/rotate/hold) and don't lock a piece. We
+        // detect a lock by piece_count advancing.
+        const bool lock_happened = (ctx_.state.piece_count != previous_piece_count);
+        if (lock_happened) {
+            const auto cfg = reward::RewardConfig::fromGlobals();
+            const bool just_died = !ctx_.state.is_alive;
+            float base = reward::computeLockBaseReward(ctx_.state, just_died, cfg);
+            float phi_new = reward::computeBoardPotential(ctx_.state, cfg);
+            reward_ = base + (phi_new - reward_prev_potential_);
+            reward_prev_potential_ = phi_new;
+        } else if (!ctx_.state.is_alive) {
+            // Non-lock step that still kills (rare edge case): apply death penalty once.
+            const auto cfg = reward::RewardConfig::fromGlobals();
+            reward_ = -cfg.death_penalty;
+        } else {
+            reward_ = 0.0f;
+        }
+    }
     total_reward_ += reward_;
     turn_ = Player::kPlayerNone;
     if (with_chance) { return actChanceEvent(); }

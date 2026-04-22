@@ -71,6 +71,11 @@ extern int nn_num_blocks;
 extern int nn_num_hidden_channels;
 extern int nn_num_value_hidden_channels;
 extern std::string nn_type_name;
+extern int nn_placement_d_model;
+extern int nn_placement_n_layers;
+extern int nn_placement_n_heads;
+extern int nn_placement_mlp_ratio;
+extern float nn_placement_dropout;
 
 // environment parameters
 extern int env_board_size;
@@ -93,6 +98,20 @@ extern bool env_modern_tetris_auto_drop;
 extern int env_modern_tetris_num_preview_piece;
 extern int env_modern_tetris_history_length;
 extern int env_modern_tetris_max_episode_steps;
+extern float env_modern_tetris_reward_survival_bonus;
+extern float env_modern_tetris_reward_death_penalty;
+extern float env_modern_tetris_reward_lines_sent_weight;
+extern float env_modern_tetris_reward_clear_1;
+extern float env_modern_tetris_reward_clear_2;
+extern float env_modern_tetris_reward_clear_3;
+extern float env_modern_tetris_reward_clear_4;
+extern float env_modern_tetris_reward_tspin_bonus;
+extern float env_modern_tetris_reward_tspin_mini_bonus;
+extern float env_modern_tetris_reward_b2b_bonus;
+extern float env_modern_tetris_reward_combo_bonus;
+extern float env_modern_tetris_reward_perfect_clear_bonus;
+extern float env_modern_tetris_reward_height_weight;
+extern float env_modern_tetris_reward_hole_weight;
 extern int env_tetris_block_puzzle_num_holding_block;
 extern int env_tetris_block_puzzle_num_preview_holding_block;
 
