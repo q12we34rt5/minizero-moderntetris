@@ -64,6 +64,7 @@ extern float learner_momentum;
 extern float learner_weight_decay;
 extern float learner_value_loss_scale;
 extern int learner_num_thread;
+extern int learner_placement_cache_interval;
 
 // network parameters
 extern std::string nn_file_name;

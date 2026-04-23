@@ -21,6 +21,7 @@ void MCTSSearchData::clear()
     search_info_ = "";
     selected_node_ = nullptr;
     node_path_.clear();
+    env_transition_.reset();
 }
 
 void ZeroActor::reset()
@@ -55,12 +56,14 @@ void ZeroActor::beforeNNEvaluation()
 {
     mcts_search_data_.node_path_ = selection();
     if (alphazero_network_) {
-        Environment env_transition = getEnvironmentTransition(mcts_search_data_.node_path_);
+        mcts_search_data_.env_transition_ = getEnvironmentTransition(mcts_search_data_.node_path_);
+        const Environment& env_transition = *mcts_search_data_.env_transition_;
         feature_rotation_ = config::actor_use_random_rotation_features ? static_cast<utils::Rotation>(utils::Random::randInt() % static_cast<int>(utils::Rotation::kRotateSize)) : utils::Rotation::kRotationNone;
         nn_evaluation_batch_id_ = alphazero_network_->pushBack(env_transition.getFeatures(feature_rotation_));
 #if MODERNTETRIS_PLACEMENT
     } else if (placement_network_) {
-        Environment env_transition = getEnvironmentTransition(mcts_search_data_.node_path_);
+        mcts_search_data_.env_transition_ = getEnvironmentTransition(mcts_search_data_.node_path_);
+        const Environment& env_transition = *mcts_search_data_.env_transition_;
         feature_rotation_ = utils::Rotation::kRotationNone;
         using namespace minizero::env::moderntetris_placement;
         auto in = network::buildPlacementNetworkInput(
@@ -69,6 +72,7 @@ void ZeroActor::beforeNNEvaluation()
         nn_evaluation_batch_id_ = placement_network_->pushBack(std::move(in));
 #endif
     } else if (muzero_network_) {
+        mcts_search_data_.env_transition_.reset();
         if (getMCTS()->getNumSimulation() == 0) { // initial inference for root node
             nn_evaluation_batch_id_ = muzero_network_->pushBackInitialData(env_.getFeatures());
         } else { // for non-root nodes
@@ -89,7 +93,8 @@ void ZeroActor::afterNNEvaluation(const std::shared_ptr<NetworkOutput>& network_
     const std::vector<MCTSNode*>& node_path = mcts_search_data_.node_path_;
     MCTSNode* leaf_node = node_path.back();
     if (alphazero_network_) {
-        Environment env_transition = getEnvironmentTransition(node_path);
+        assert(mcts_search_data_.env_transition_.has_value());
+        const Environment& env_transition = *mcts_search_data_.env_transition_;
         if (!env_transition.isTerminal()) {
             std::shared_ptr<AlphaZeroNetworkOutput> alphazero_output = std::static_pointer_cast<AlphaZeroNetworkOutput>(network_output);
             getMCTS()->expand(leaf_node, calculateAlphaZeroActionPolicy(env_transition, alphazero_output, feature_rotation_));
@@ -99,7 +104,8 @@ void ZeroActor::afterNNEvaluation(const std::shared_ptr<NetworkOutput>& network_
         }
 #if MODERNTETRIS_PLACEMENT
     } else if (placement_network_) {
-        Environment env_transition = getEnvironmentTransition(node_path);
+        assert(mcts_search_data_.env_transition_.has_value());
+        const Environment& env_transition = *mcts_search_data_.env_transition_;
         if (!env_transition.isTerminal()) {
             auto placement_output = std::static_pointer_cast<PlacementNetworkOutput>(network_output);
             getMCTS()->expand(leaf_node, calculatePlacementActionPolicy(env_transition, placement_output));
@@ -115,6 +121,13 @@ void ZeroActor::afterNNEvaluation(const std::shared_ptr<NetworkOutput>& network_
         leaf_node->setHiddenStateDataIndex(getMCTS()->getTreeHiddenStateData().store(HiddenStateData(muzero_output->hidden_state_)));
     } else {
         assert(false);
+    }
+    // Move the cached env into the leaf so descendants in future simulations
+    // can clone(parent.env) + 1 act() instead of replaying from root. No-op
+    // for muzero (env_transition_ stays empty in beforeNNEvaluation).
+    if (mcts_search_data_.env_transition_.has_value()) {
+        leaf_node->setEnv(std::move(*mcts_search_data_.env_transition_));
+        mcts_search_data_.env_transition_.reset();
     }
     if (leaf_node == getMCTS()->getRootNode()) { addNoiseToNodeChildren(leaf_node); }
     if (isSearchDone()) { handleSearchDone(); }
@@ -173,12 +186,12 @@ void ZeroActor::step()
                               direct_inference ? num_simulation_left : 1 /* initial inference for root node */);
     assert(batch_size > 0);
 
-    std::vector<std::tuple<int, utils::Rotation, decltype(mcts_search_data_.node_path_)>> batch_queries; // batch id, rotation, search path
+    std::vector<std::tuple<int, utils::Rotation, decltype(mcts_search_data_.node_path_), std::optional<Environment>>> batch_queries; // batch id, rotation, search path, cached env
     for (int batch_id = 0; batch_id < batch_size; batch_id++) {
         beforeNNEvaluation();
         assert(nn_evaluation_batch_id_ == batch_id);
         if (mcts_search_data_.node_path_.back()->getVirtualLoss() == 0) {
-            batch_queries.emplace_back(nn_evaluation_batch_id_, feature_rotation_, mcts_search_data_.node_path_);
+            batch_queries.emplace_back(nn_evaluation_batch_id_, feature_rotation_, mcts_search_data_.node_path_, mcts_search_data_.env_transition_);
         }
         for (auto node : mcts_search_data_.node_path_) { node->addVirtualLoss(); }
     }
@@ -196,6 +209,7 @@ void ZeroActor::step()
         nn_evaluation_batch_id_ = std::get<0>(query);
         feature_rotation_ = std::get<1>(query);
         mcts_search_data_.node_path_ = std::get<2>(query);
+        mcts_search_data_.env_transition_ = std::move(std::get<3>(query));
         afterNNEvaluation(network_output[nn_evaluation_batch_id_]);
         auto virtual_loss = mcts_search_data_.node_path_.back()->getVirtualLoss();
         for (auto node : mcts_search_data_.node_path_) { node->removeVirtualLoss(virtual_loss); }
@@ -312,8 +326,20 @@ std::vector<MCTS::ActionCandidate> ZeroActor::calculateMuZeroActionPolicy(MCTSNo
 
 Environment ZeroActor::getEnvironmentTransition(const std::vector<MCTSNode*>& node_path)
 {
-    Environment env = env_;
-    for (size_t i = 1; i < node_path.size(); ++i) { env.act(node_path[i]->getAction()); }
+    // Walk back to the deepest ancestor that has a cached env; clone from there
+    // and replay only the remaining steps. Steady state after the first hit at
+    // a subtree: 1 act() per call instead of node_path.size()-1.
+    size_t start = 0;
+    for (size_t i = node_path.size(); i-- > 1;) {
+        if (node_path[i]->hasEnv()) {
+            start = i;
+            break;
+        }
+    }
+    Environment env = (start > 0) ? node_path[start]->getEnv() : env_;
+    for (size_t i = start + 1; i < node_path.size(); ++i) {
+        env.act(node_path[i]->getAction());
+    }
     return env;
 }
 

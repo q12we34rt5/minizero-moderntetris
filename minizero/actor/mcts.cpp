@@ -15,6 +15,7 @@ void MCTSNode::reset()
     value_ = 0.0f;
     reward_ = 0.0f;
     first_child_ = nullptr;
+    env_.reset();
 }
 
 void MCTSNode::add(float value, float weight /* = 1.0f */)
@@ -76,6 +77,14 @@ std::string MCTSNode::toString() const
 
 void MCTS::reset()
 {
+    // Free env caches on all nodes used by the previous search before the pool
+    // head is rewound by Tree::reset (otherwise unused slots would hold stale
+    // Environment instances until eventually re-allocated by expand()).
+    if (nodes_) {
+        for (uint64_t i = 0; i < current_node_size_; ++i) {
+            static_cast<MCTSNode*>(getNodeIndex(i))->clearEnv();
+        }
+    }
     Tree::reset();
     tree_hidden_state_data_.reset();
     tree_value_bound_.clear();

@@ -9,7 +9,9 @@
 #include <cmath>
 #include <limits>
 #include <map>
+#include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace minizero::actor {
@@ -52,6 +54,15 @@ public:
     inline float getReward() const { return reward_; }
     inline virtual MCTSNode* getChild(int index) const override { return (index < num_children_ ? static_cast<MCTSNode*>(first_child_) + index : nullptr); }
 
+    // Cached env at this node, populated when the node is expanded so future
+    // descendants only need clone(parent.env) + 1 act, instead of cloning root
+    // env and replaying the full path. Lifetime: managed by MCTS::reset (walks
+    // pool, clears) and MCTSNode::reset (clears on slot reuse).
+    inline bool hasEnv() const { return env_ != nullptr; }
+    inline const Environment& getEnv() const { return *env_; }
+    inline void setEnv(Environment env) { env_ = std::make_unique<Environment>(std::move(env)); }
+    inline void clearEnv() { env_.reset(); }
+
 protected:
     int hidden_state_data_index_;
     float mean_;
@@ -62,6 +73,7 @@ protected:
     float policy_noise_;
     float value_;
     float reward_;
+    std::unique_ptr<Environment> env_;
 };
 
 class HiddenStateData {

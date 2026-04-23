@@ -9,6 +9,7 @@
 #include "placement_transformer_network.h"
 #endif
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -21,6 +22,10 @@ public:
     std::string search_info_;
     MCTSNode* selected_node_;
     std::vector<MCTSNode*> node_path_;
+    // Cache of the environment at the leaf of node_path_. Populated by
+    // beforeNNEvaluation and reused by the matching afterNNEvaluation.
+    // Empty for muzero (which never needs real env transitions inside search).
+    std::optional<Environment> env_transition_;
     void clear();
 };
 

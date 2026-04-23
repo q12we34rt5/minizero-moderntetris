@@ -57,6 +57,25 @@ public:
 #endif
 };
 
+#if MODERNTETRIS_PLACEMENT
+// Per-env replay snapshot cache. snapshots[k] is the env state right before
+// applying action k; size matches the env_loader's data range. Filled lazily
+// during sampling: a sample at pos P copies the nearest cached snapshot <= P,
+// replays forward through the missing steps, and caches each intermediate
+// state so future samples land in a hot slot. The mutex serializes concurrent
+// fills on the same env_id; contention is rare because samples spread across
+// ~1000s of envs with only learner_num_thread workers.
+//
+// NOTE: relies on Environment's default copy semantics. ModernTetrisPlacementEnv
+// has no user-defined copy ctor; if anyone adds non-copyable members (unique_ptr,
+// custom resources), update this cache or copies will silently break.
+struct EnvCacheEntry {
+    std::mutex mutex;
+    std::vector<std::shared_ptr<const Environment>> snapshots;
+    explicit EnvCacheEntry(int num_positions) : snapshots(num_positions) {}
+};
+#endif
+
 class ReplayBuffer {
 public:
     ReplayBuffer();
@@ -67,6 +86,11 @@ public:
     std::deque<float> game_priorities_;
     std::deque<std::deque<float>> position_priorities_;
     std::deque<EnvironmentLoader> env_loaders_;
+#if MODERNTETRIS_PLACEMENT
+    // Parallel-indexed with env_loaders_; pushed/popped together in addData().
+    // unique_ptr because EnvCacheEntry holds a non-movable mutex.
+    std::deque<std::unique_ptr<EnvCacheEntry>> env_caches_;
+#endif
 
     void addData(const EnvironmentLoader& env_loader);
     std::pair<int, int> sampleEnvAndPos();

@@ -142,6 +142,18 @@ public:
     std::vector<PlacementActionDescriptor> getActionDescriptors() const; // aligned with getLegalActions() order
     int getBoardChannels() const { return kPlacementBoardChannels; }
 
+    // Free the cached BFS placement results. Each cached entry carries a full
+    // PlacementSearchResult (including the BFS path and final State), so the
+    // cache can grow to tens of KB; clearing it before snapshotting an env in
+    // the data loader keeps replay-buffer memory bounded. Safe to call any
+    // time -- placements_dirty_ stays true so the next consumer rebuilds.
+    void shrinkPlacementCache()
+    {
+        cached_placements_.clear();
+        cached_placements_.shrink_to_fit();
+        placements_dirty_ = true;
+    }
+
 private:
     struct CachedPlacement {
         int action_id;

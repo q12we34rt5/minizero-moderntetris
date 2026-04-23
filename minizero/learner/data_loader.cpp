@@ -44,6 +44,11 @@ void ReplayBuffer::addData(const EnvironmentLoader& env_loader)
     position_priorities_.push_back(position_priorities);
     game_priorities_.push_back(game_priority);
     env_loaders_.push_back(env_loader);
+#if MODERNTETRIS_PLACEMENT
+    // Cache slot covers positions 0..data_range.second (parallel indexing
+    // with position_priorities_, which is sized data_range.second + 1).
+    env_caches_.push_back(std::make_unique<EnvCacheEntry>(data_range.second + 1));
+#endif
 
     // remove old data if replay buffer is full
     const size_t replay_buffer_max_size = config::zero_replay_buffer * config::zero_num_games_per_iteration;
@@ -53,6 +58,9 @@ void ReplayBuffer::addData(const EnvironmentLoader& env_loader)
         position_priorities_.pop_front();
         game_priorities_.pop_front();
         env_loaders_.pop_front();
+#if MODERNTETRIS_PLACEMENT
+        env_caches_.pop_front();
+#endif
     }
 }
 
@@ -277,10 +285,58 @@ void DataLoaderThread::setPlacementTrainingData(int batch_index)
     // at pos t have different action_ids than those stored in SGF -> dense_policy
     // lookup returns 0 for every descriptor -> pi_sum=0 -> uniform fallback label.
     // (Diagnosed via overfit test showing all label top-5 weights = 1/N.)
+    //
+    // Optimization: per-env snapshot cache. Each act() runs findPlacements()
+    // (BFS), so naive replay-from-zero costs O(pos * BFS) per sample. The
+    // cache memoizes the env state at every position; after warmup the same
+    // env is sampled at hot slots and we skip the replay entirely (one copy).
     Environment env;
-    env.reset(env_loader.getSeed());
-    for (int i = 0; i < std::min(pos, static_cast<int>(env_loader.getActionPairs().size())); ++i) {
-        env.act(env_loader.getActionPairs()[i].first);
+    {
+        EnvCacheEntry& cache = *getSharedData()->replay_buffer_.env_caches_[env_id];
+        std::lock_guard<std::mutex> lock(cache.mutex);
+
+        const auto& action_pairs = env_loader.getActionPairs();
+        const int end_pos = std::min(pos, static_cast<int>(action_pairs.size()));
+        const int snap_size = static_cast<int>(cache.snapshots.size());
+        // Only write snapshots at positions that are multiples of the
+        // interval (pos 0 is always eligible, since 0 % K == 0). Reads stay
+        // unchanged -- we walk backwards to find any cached slot, whatever
+        // spacing the writer chose.
+        const int interval = std::max(1, config::learner_placement_cache_interval);
+
+        // Find largest k <= end_pos with a cached snapshot.
+        int start_k = 0;
+        std::shared_ptr<const Environment> base;
+        const int search_from = std::min(end_pos, snap_size - 1);
+        for (int k = search_from; k >= 0; --k) {
+            if (cache.snapshots[k]) {
+                base = cache.snapshots[k];
+                start_k = k;
+                break;
+            }
+        }
+
+        if (base) {
+            env = *base;
+        } else {
+            env.reset(env_loader.getSeed());
+            // Free the BFS cache before snapshotting; placements_dirty_=true
+            // means the next consumer rebuilds, so this clear is free.
+            env.shrinkPlacementCache();
+            if (snap_size > 0) {
+                cache.snapshots[0] = std::make_shared<const Environment>(env);
+            }
+            start_k = 0;
+        }
+
+        for (int i = start_k; i < end_pos; ++i) {
+            env.act(action_pairs[i].first);
+            const int next_pos = i + 1;
+            if (next_pos < snap_size && next_pos % interval == 0 && !cache.snapshots[next_pos]) {
+                env.shrinkPlacementCache();
+                cache.snapshots[next_pos] = std::make_shared<const Environment>(env);
+            }
+        }
     }
 
     // Deterministic ordering: getActionDescriptors() comes from rebuildLegalPlacements()
