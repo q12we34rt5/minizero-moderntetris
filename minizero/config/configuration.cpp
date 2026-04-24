@@ -108,6 +108,9 @@ float env_modern_tetris_reward_clear_3 = 0.0f;
 float env_modern_tetris_reward_clear_4 = 0.0f;
 float env_modern_tetris_reward_tspin_bonus = 0.0f;
 float env_modern_tetris_reward_tspin_mini_bonus = 0.0f;
+float env_modern_tetris_reward_all_spin_bonus = 0.0f;
+float env_modern_tetris_reward_clear_depth_weight_bottom = 1.0f;
+float env_modern_tetris_reward_clear_depth_weight_top = 1.0f;
 float env_modern_tetris_reward_b2b_bonus = 0.0f;
 float env_modern_tetris_reward_combo_bonus = 0.0f;
 float env_modern_tetris_reward_perfect_clear_bonus = 5.0f;
@@ -245,10 +248,13 @@ void setConfiguration(ConfigureLoader& cl)
     cl.addParameter("env_modern_tetris_reward_clear_4", env_modern_tetris_reward_clear_4, "reward shaping: extra bonus for a tetris clear", "Environment");
     cl.addParameter("env_modern_tetris_reward_tspin_bonus", env_modern_tetris_reward_tspin_bonus, "reward shaping: extra bonus when a line clear comes with a T-spin", "Environment");
     cl.addParameter("env_modern_tetris_reward_tspin_mini_bonus", env_modern_tetris_reward_tspin_mini_bonus, "reward shaping: extra bonus when a line clear comes with a T-spin mini", "Environment");
+    cl.addParameter("env_modern_tetris_reward_all_spin_bonus", env_modern_tetris_reward_all_spin_bonus, "reward shaping: extra bonus when a line clear comes with an all-spin (non-T piece spin)", "Environment");
+    cl.addParameter("env_modern_tetris_reward_clear_depth_weight_bottom", env_modern_tetris_reward_clear_depth_weight_bottom, "reward shaping: multiplier applied to all clear-related rewards (lines_sent, clear_N, spin, b2b, combo, perfect_clear) when the piece locks at the bottom visible row; linearly interpolated with clear_depth_weight_top by pre-lock y", "Environment");
+    cl.addParameter("env_modern_tetris_reward_clear_depth_weight_top", env_modern_tetris_reward_clear_depth_weight_top, "reward shaping: multiplier applied to all clear-related rewards when the piece locks at the top visible row; linearly interpolated with clear_depth_weight_bottom by pre-lock y", "Environment");
     cl.addParameter("env_modern_tetris_reward_b2b_bonus", env_modern_tetris_reward_b2b_bonus, "reward shaping: flat bonus when a back-to-back streak is active on clear", "Environment");
     cl.addParameter("env_modern_tetris_reward_combo_bonus", env_modern_tetris_reward_combo_bonus, "reward shaping: bonus multiplied by combo_count on clear", "Environment");
     cl.addParameter("env_modern_tetris_reward_perfect_clear_bonus", env_modern_tetris_reward_perfect_clear_bonus, "reward shaping: bonus when the lock results in a perfect clear", "Environment");
-    cl.addParameter("env_modern_tetris_reward_height_weight", env_modern_tetris_reward_height_weight, "potential shaping: weight for sum of column heights (lower = better)", "Environment");
+    cl.addParameter("env_modern_tetris_reward_height_weight", env_modern_tetris_reward_height_weight, "potential shaping: weight for max column height (lower = better)", "Environment");
     cl.addParameter("env_modern_tetris_reward_hole_weight", env_modern_tetris_reward_hole_weight, "potential shaping: weight for hole count (lower = better)", "Environment");
 #endif
 

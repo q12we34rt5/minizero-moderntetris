@@ -118,6 +118,11 @@ bool ModernTetrisPlacementEnv::act(const ModernTetrisPlacementAction& action, bo
     for (const auto& pa : found->result.path) {
         engine::step::step(&ctx_, placementActionToStepAction(pa));
     }
+    // Capture the piece type + lock y before hard-drop advances state.current
+    // and overwrites state.y. lock_y is the piece's settled y (top-left of its
+    // 4x4 bbox) — used to index depth-keyed reward terms.
+    const engine::PieceType locked_piece = ctx_.state.current;
+    const int locked_y = static_cast<int>(found->result.lock_y);
     engine::step::step(&ctx_, engine::step::Action::HARD_DROP);
 
     resetActivePieceHistory();
@@ -128,7 +133,7 @@ bool ModernTetrisPlacementEnv::act(const ModernTetrisPlacementAction& action, bo
         using namespace minizero::env::moderntetris;
         const auto cfg = reward::RewardConfig::fromGlobals();
         const bool just_died = !ctx_.state.is_alive;
-        float base = reward::computeLockBaseReward(ctx_.state, just_died, cfg);
+        float base = reward::computeLockBaseReward(ctx_.state, locked_piece, locked_y, just_died, cfg);
         float phi_new = reward::computeBoardPotential(ctx_.state, cfg);
         reward_ = base + (phi_new - reward_prev_potential_);
         reward_prev_potential_ = phi_new;

@@ -96,6 +96,9 @@ bool ModernTetrisEnv::act(const ModernTetrisAction& action, bool with_chance /* 
 
     const std::vector<float> previous_active_plane = captureActivePiecePlane();
     const auto previous_piece_count = ctx_.state.piece_count;
+    // Capture current piece type before step; after a hard-drop advance,
+    // state.current is already the next piece.
+    const engine::PieceType locked_piece = ctx_.state.current;
     if (!isActionEffective(action)) { return false; }
     engine::step::Info info = engine::step::step(&ctx_, toEngineAction(action.getActionID()));
 
@@ -115,7 +118,10 @@ bool ModernTetrisEnv::act(const ModernTetrisAction& action, bool with_chance /* 
         if (lock_happened) {
             const auto cfg = reward::RewardConfig::fromGlobals();
             const bool just_died = !ctx_.state.is_alive;
-            float base = reward::computeLockBaseReward(ctx_.state, just_died, cfg);
+            // Step env has no cheap pre-lock lock_y (locks can come from HARD_DROP,
+            // soft-drop-to-floor, or lifetime expiry) — pass -1 to skip the
+            // depth-keyed term.
+            float base = reward::computeLockBaseReward(ctx_.state, locked_piece, -1, just_died, cfg);
             float phi_new = reward::computeBoardPotential(ctx_.state, cfg);
             reward_ = base + (phi_new - reward_prev_potential_);
             reward_prev_potential_ = phi_new;
