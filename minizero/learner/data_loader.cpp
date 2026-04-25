@@ -395,6 +395,7 @@ void DataLoaderThread::setPlacementTrainingData(int batch_index)
     // Per-action tensors and pi_target (zero-initialized by numpy).
     const int action_base = batch_index * N_max;
     float pi_sum = 0.0f;
+    int match_count = 0; // replay descriptors whose action_id also appears with non-zero weight in the SGF policy
     for (int i = 0; i < N; ++i) {
         const auto& d = descs[i];
         dp->placement_action_use_hold_[action_base + i] = d.use_hold ? 1 : 0;
@@ -408,6 +409,7 @@ void DataLoaderThread::setPlacementTrainingData(int batch_index)
         const float w = (d.action_id >= 0 && d.action_id < static_cast<int>(dense_policy.size())) ? dense_policy[d.action_id] : 0.0f;
         dp->policy_[action_base + i] = w;
         pi_sum += w;
+        if (w > 0.0f) { ++match_count; }
     }
     // Pad tail: masked = 1, π_target = 0. Action field tails are already zero
     // from the numpy allocator but reset to be safe.
@@ -422,23 +424,41 @@ void DataLoaderThread::setPlacementTrainingData(int batch_index)
         dp->placement_action_mask_[action_base + i] = 1; // padded
         dp->policy_[action_base + i] = 0.0f;
     }
-    // Re-normalize pi_target. pi_sum == 0 means NONE of the current-env's
-    // legal placements matched any action_id stored in the SGF policy. That's
-    // a data-integrity / determinism bug (e.g. missing seed-replay, or BFS
-    // output drifted across runs). Silently falling back to uniform here
-    // previously masked a major bug, so we fail loudly instead.
-    if (pi_sum > 0.0f) {
-        for (int i = 0; i < N; ++i) { dp->policy_[action_base + i] /= pi_sum; }
-    } else {
-        std::cerr << "[placement loader] FATAL: pi_sum == 0 at env_id=" << env_id
-                  << " pos=" << pos << " N=" << N
-                  << " chosen_action_id=" << env_loader.getActionPairs()[pos].first.getActionID()
-                  << ". None of the env's legal placements match any id in the SGF's P[] tag."
-                  << " Likely causes: (1) missing env.reset(seed) before replay,"
-                  << " (2) findPlacements() BFS determinism broke,"
-                  << " (3) hold-branch merge order changed." << std::endl;
-        throw std::runtime_error("placement training: pi_sum == 0");
+    // Strict determinism check: every non-zero entry in the SGF policy must
+    // correspond to a legal placement in the replayed env. If any SGF non-zero
+    // action_id is missing from the replay's legal set, the replay has diverged
+    // from self-play and training on this sample would silently distort
+    // pi_target (partial overlap gets re-normalized to a wrong distribution).
+    // The old pi_sum == 0 check caught only full divergence; this catches any.
+    int sgf_nonzero = 0;
+    for (float w : dense_policy) {
+        if (w > 0.0f) { ++sgf_nonzero; }
     }
+    if (sgf_nonzero == 0) {
+        std::ostringstream oss;
+        oss << "[placement loader] FATAL: SGF policy has no non-zero entries at env_id=" << env_id
+            << " pos=" << pos << " N=" << N
+            << ". The stored P[] tag is empty -- likely an SGF write bug or truncated record.";
+        std::cerr << oss.str() << std::endl;
+        throw std::runtime_error(oss.str());
+    }
+    if (match_count != sgf_nonzero) {
+        std::ostringstream oss;
+        oss << "[placement loader] FATAL: replay diverged from self-play at env_id=" << env_id
+            << " pos=" << pos << " N=" << N
+            << " match=" << match_count << "/" << sgf_nonzero
+            << " chosen_action_id=" << env_loader.getActionPairs()[pos].first.getActionID()
+            << ". Replay's legal set is missing " << (sgf_nonzero - match_count)
+            << " SGF non-zero policy id(s)."
+            << " Likely causes: (1) missing env.reset(seed) before replay,"
+            << " (2) findPlacements() BFS determinism broke,"
+            << " (3) hold-branch merge order changed,"
+            << " (4) env config differs between sp and op (e.g. garbage params, piece_lifetime).";
+        std::cerr << oss.str() << std::endl;
+        throw std::runtime_error(oss.str());
+    }
+    // match_count > 0 here, so pi_sum > 0.
+    for (int i = 0; i < N; ++i) { dp->policy_[action_base + i] /= pi_sum; }
 
     // Value.
     std::copy(value.begin(), value.end(), dp->value_ + value.size() * batch_index);

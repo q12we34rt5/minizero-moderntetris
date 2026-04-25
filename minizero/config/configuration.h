@@ -116,6 +116,10 @@ extern float env_modern_tetris_reward_combo_bonus;
 extern float env_modern_tetris_reward_perfect_clear_bonus;
 extern float env_modern_tetris_reward_height_weight;
 extern float env_modern_tetris_reward_hole_weight;
+extern float env_modern_tetris_garbage_probability;
+extern int env_modern_tetris_garbage_min_lines;
+extern int env_modern_tetris_garbage_max_lines;
+extern int env_modern_tetris_garbage_delay;
 extern int env_tetris_block_puzzle_num_holding_block;
 extern int env_tetris_block_puzzle_num_preview_holding_block;
 

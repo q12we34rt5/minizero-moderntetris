@@ -6,6 +6,8 @@
 #include <cassert>
 #include <cctype>
 #include <cmath>
+#include <cstdint>
+#include <limits>
 #include <sstream>
 #include <utility>
 
@@ -16,6 +18,16 @@ using namespace minizero::utils;
 namespace {
 
     constexpr int kVisibleCellCount = kModernTetrisPlacementBoardWidth * kModernTetrisPlacementBoardHeight;
+
+    // Mirrors the engine's private xorshf32 (tetris.cpp) so this stream stays
+    // in lock-step with the engine's existing garbage_seed usage (hole position).
+    inline std::uint32_t xorshift32(std::uint32_t& seed)
+    {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        return seed;
+    }
 
 } // namespace
 
@@ -124,6 +136,25 @@ bool ModernTetrisPlacementEnv::act(const ModernTetrisPlacementAction& action, bo
     const engine::PieceType locked_piece = ctx_.state.current;
     const int locked_y = static_cast<int>(found->result.lock_y);
     engine::step::step(&ctx_, engine::step::Action::HARD_DROP);
+
+    // Inject random garbage after the hard-drop so the current piece's attack
+    // only counters pre-existing queue entries (new garbage waits until the
+    // next placement's processGarbageAndCounterAttack). Deterministic from the
+    // state's garbage_seed stream -- loader replay reconstructs it identically.
+    if (config::env_modern_tetris_garbage_probability > 0.0f && ctx_.state.is_alive) {
+        auto& seed = ctx_.state.garbage_seed;
+        const float u = static_cast<float>(xorshift32(seed)) / static_cast<float>(std::numeric_limits<std::uint32_t>::max());
+        if (u < config::env_modern_tetris_garbage_probability) {
+            const int lo = std::max(1, config::env_modern_tetris_garbage_min_lines);
+            const int hi = std::max(lo, config::env_modern_tetris_garbage_max_lines);
+            const std::uint32_t range = static_cast<std::uint32_t>(hi - lo + 1);
+            const int lines = lo + static_cast<int>(xorshift32(seed) % range);
+            const int delay = std::max(0, config::env_modern_tetris_garbage_delay);
+            engine::addGarbage(&ctx_.state,
+                               static_cast<std::uint8_t>(std::min(lines, 255)),
+                               static_cast<std::uint8_t>(std::min(delay, 255)));
+        }
+    }
 
     resetActivePieceHistory();
     placements_dirty_ = true;

@@ -116,6 +116,10 @@ float env_modern_tetris_reward_combo_bonus = 0.0f;
 float env_modern_tetris_reward_perfect_clear_bonus = 5.0f;
 float env_modern_tetris_reward_height_weight = 0.02f;
 float env_modern_tetris_reward_hole_weight = 0.1f;
+float env_modern_tetris_garbage_probability = 0.0f;
+int env_modern_tetris_garbage_min_lines = 1;
+int env_modern_tetris_garbage_max_lines = 4;
+int env_modern_tetris_garbage_delay = 8;
 int env_tetris_block_puzzle_num_holding_block = 3;
 int env_tetris_block_puzzle_num_preview_holding_block = 0;
 
@@ -256,6 +260,10 @@ void setConfiguration(ConfigureLoader& cl)
     cl.addParameter("env_modern_tetris_reward_perfect_clear_bonus", env_modern_tetris_reward_perfect_clear_bonus, "reward shaping: bonus when the lock results in a perfect clear", "Environment");
     cl.addParameter("env_modern_tetris_reward_height_weight", env_modern_tetris_reward_height_weight, "potential shaping: weight for max column height (lower = better)", "Environment");
     cl.addParameter("env_modern_tetris_reward_hole_weight", env_modern_tetris_reward_hole_weight, "potential shaping: weight for hole count (lower = better)", "Environment");
+    cl.addParameter("env_modern_tetris_garbage_probability", env_modern_tetris_garbage_probability, "per-placement probability of injecting random garbage lines (0 = disabled); deterministic from the env's garbage_seed stream", "Environment");
+    cl.addParameter("env_modern_tetris_garbage_min_lines", env_modern_tetris_garbage_min_lines, "minimum garbage lines per injection (inclusive); sampled uniformly with max_lines", "Environment");
+    cl.addParameter("env_modern_tetris_garbage_max_lines", env_modern_tetris_garbage_max_lines, "maximum garbage lines per injection (inclusive); sampled uniformly with min_lines", "Environment");
+    cl.addParameter("env_modern_tetris_garbage_delay", env_modern_tetris_garbage_delay, "queue delay (in hard-drop steps) before injected garbage is applied to the board; note delays 0 and 1 are equivalent due to decrement-before-apply in the engine", "Environment");
 #endif
 
     // references
