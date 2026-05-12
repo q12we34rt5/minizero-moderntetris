@@ -35,7 +35,6 @@ struct PlacementNetworkInput {
     std::vector<int> preview; // each 0..6, -1 if NONE -> 7
     int was_rotation;         // 0/1
     int srs_index;            // shifted: original (-1..5) + 1 -> 0..6
-    float lifetime;           // 0..1 (always 0 for placement mode; kept for parity)
     float combo_scaled;       // precomputed scaling on C++ side
     int back_to_back;         // 0/1
     float garbage_scaled;     // precomputed scaling on C++ side
@@ -71,7 +70,6 @@ inline PlacementNetworkInput buildPlacementNetworkInput(const Env& env,
     in.preview = g.preview;
     in.was_rotation = g.was_rotation ? 1 : 0;
     in.srs_index = std::clamp(g.srs_index + 1, 0, 6);
-    in.lifetime = 0.0f;
     in.combo_scaled = std::clamp((g.combo_count + 1) / 10.0f, 0.0f, 1.0f);
     in.back_to_back = g.back_to_back ? 1 : 0;
     in.garbage_scaled = std::clamp(g.pending_garbage / 20.0f, 0.0f, 1.0f);
@@ -194,7 +192,6 @@ public:
         std::vector<int64_t> preview_buf(B * preview_size, 0);
         std::vector<float> was_rotation_buf(B, 0.0f);
         std::vector<int64_t> srs_index_buf(B, 0);
-        std::vector<float> lifetime_buf(B, 0.0f);
         std::vector<float> combo_buf(B, 0.0f);
         std::vector<float> b2b_buf(B, 0.0f);
         std::vector<float> garbage_buf(B, 0.0f);
@@ -226,7 +223,6 @@ public:
             }
             was_rotation_buf[i] = static_cast<float>(in.was_rotation);
             srs_index_buf[i] = static_cast<int64_t>(std::clamp(in.srs_index, 0, 6));
-            lifetime_buf[i] = in.lifetime;
             combo_buf[i] = in.combo_scaled;
             b2b_buf[i] = static_cast<float>(in.back_to_back);
             garbage_buf[i] = in.garbage_scaled;
@@ -256,7 +252,6 @@ public:
         auto preview_t = torch::from_blob(preview_buf.data(), {B, preview_size}, opts_long).clone();
         auto was_rotation_t = torch::from_blob(was_rotation_buf.data(), {B}, opts_float).clone();
         auto srs_index_t = torch::from_blob(srs_index_buf.data(), {B}, opts_long).clone();
-        auto lifetime_t = torch::from_blob(lifetime_buf.data(), {B}, opts_float).clone();
         auto combo_t = torch::from_blob(combo_buf.data(), {B}, opts_float).clone();
         auto b2b_t = torch::from_blob(b2b_buf.data(), {B}, opts_float).clone();
         auto garbage_t = torch::from_blob(garbage_buf.data(), {B}, opts_float).clone();
@@ -278,7 +273,6 @@ public:
             preview_t.to(dev),
             was_rotation_t.to(dev),
             srs_index_t.to(dev),
-            lifetime_t.to(dev),
             combo_t.to(dev),
             b2b_t.to(dev),
             garbage_t.to(dev),

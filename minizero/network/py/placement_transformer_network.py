@@ -70,21 +70,19 @@ class PieceQueueEmbed(nn.Module):
 
 
 class PieceStateEmbed(nn.Module):
-    """[was_rotation(1), srs_onehot(7), lifetime(1)] -> [B, 1, d_model]."""
+    """[was_rotation(1), srs_onehot(7)] -> [B, 1, d_model]."""
 
     def __init__(self, d_model: int):
         super().__init__()
         self.srs_size = 7  # -1..5 shifted to 0..6
-        self.proj = nn.Linear(1 + self.srs_size + 1, d_model)
+        self.proj = nn.Linear(1 + self.srs_size, d_model)
         self.type_embed = nn.Parameter(torch.zeros(1, 1, d_model))
         nn.init.trunc_normal_(self.type_embed, std=0.02)
 
-    def forward(self, was_rotation: torch.Tensor, srs_index: torch.Tensor,
-                lifetime: torch.Tensor) -> torch.Tensor:
-        # was_rotation [B] float, srs_index [B] long (already shifted 0..6),
-        # lifetime [B] float
+    def forward(self, was_rotation: torch.Tensor, srs_index: torch.Tensor) -> torch.Tensor:
+        # was_rotation [B] float, srs_index [B] long (already shifted 0..6)
         srs_onehot = F.one_hot(srs_index, num_classes=self.srs_size).float()         # [B, 7]
-        x = torch.cat([was_rotation.unsqueeze(1), srs_onehot, lifetime.unsqueeze(1)], dim=1)
+        x = torch.cat([was_rotation.unsqueeze(1), srs_onehot], dim=1)
         x = self.proj(x).unsqueeze(1) + self.type_embed                              # [B, 1, d]
         return x
 
@@ -262,7 +260,6 @@ class PlacementTransformerNetwork(nn.Module):
                 preview: torch.Tensor,
                 was_rotation: torch.Tensor,
                 srs_index: torch.Tensor,
-                lifetime: torch.Tensor,
                 combo: torch.Tensor,
                 back_to_back: torch.Tensor,
                 pending_garbage: torch.Tensor,
@@ -283,7 +280,6 @@ class PlacementTransformerNetwork(nn.Module):
           preview             [B, preview_size]   long (0..6, NONE=7)
           was_rotation        [B]                 float (0/1)
           srs_index           [B]                 long (shifted -1..5 -> 0..6)
-          lifetime            [B]                 float (0..1)
           combo               [B]                 float (normalized)
           back_to_back        [B]                 float (0/1)
           pending_garbage     [B]                 float (normalized)
@@ -294,7 +290,7 @@ class PlacementTransformerNetwork(nn.Module):
 
         patches = self.patch_embed(board)                                             # [B, n_patches, d]
         queue = self.queue_embed(current_piece, hold_piece, has_held, preview)        # [B, 7, d]
-        piece_state = self.piece_state_embed(was_rotation, srs_index, lifetime)       # [B, 1, d]
+        piece_state = self.piece_state_embed(was_rotation, srs_index)                 # [B, 1, d]
         meta = self.meta_embed(combo, back_to_back, pending_garbage)                  # [B, 1, d]
         value_tok = self.value_token.expand(B, -1, -1)                                # [B, 1, d]
         actions_pre = self.action_embed(action_use_hold, action_lock_x, action_lock_y,
@@ -355,7 +351,6 @@ def _smoke_test():
     preview = torch.randint(0, 7, (B, preview_size))
     was_rotation = torch.randint(0, 2, (B,)).float()
     srs_index = torch.randint(0, 7, (B,))
-    lifetime = torch.rand(B)
     combo = torch.rand(B)
     b2b = torch.randint(0, 2, (B,)).float()
     garbage = torch.rand(B)
@@ -373,7 +368,7 @@ def _smoke_test():
         action_mask[i, n:] = True
 
     out = net(board, current, hold, has_held, preview,
-              was_rotation, srs_index, lifetime,
+              was_rotation, srs_index,
               combo, b2b, garbage,
               a_use_hold, a_lock_x, a_lock_y, a_orient, a_spin, a_piece, a_clear,
               action_mask)
@@ -391,7 +386,7 @@ def _smoke_test():
     # TorchScript export
     scripted = torch.jit.script(net)
     out2 = scripted(board, current, hold, has_held, preview,
-                    was_rotation, srs_index, lifetime,
+                    was_rotation, srs_index,
                     combo, b2b, garbage,
                     a_use_hold, a_lock_x, a_lock_y, a_orient, a_spin, a_piece, a_clear,
                     action_mask)

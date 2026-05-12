@@ -56,7 +56,6 @@ class MinizeroDadaLoader:
         self._pl_preview = np.zeros(B * prev, dtype=np.int64)
         self._pl_was_rotation = np.zeros(B, dtype=np.float32)
         self._pl_srs = np.zeros(B, dtype=np.int64)
-        self._pl_lifetime = np.zeros(B, dtype=np.float32)
         self._pl_combo = np.zeros(B, dtype=np.float32)
         self._pl_b2b = np.zeros(B, dtype=np.float32)
         self._pl_garbage = np.zeros(B, dtype=np.float32)
@@ -80,7 +79,7 @@ class MinizeroDadaLoader:
         self.data_loader.sample_data_placement(
             self._pl_board, self.policy, self.value, self.loss_scale, self.sampled_index,
             self._pl_current, self._pl_hold, self._pl_has_held, self._pl_preview,
-            self._pl_was_rotation, self._pl_srs, self._pl_lifetime, self._pl_combo,
+            self._pl_was_rotation, self._pl_srs, self._pl_combo,
             self._pl_b2b, self._pl_garbage,
             self._pl_a_use_hold, self._pl_a_lock_x, self._pl_a_lock_y,
             self._pl_a_orient, self._pl_a_spin, self._pl_a_piece, self._pl_a_lines,
@@ -108,7 +107,6 @@ class MinizeroDadaLoader:
             "preview": t(self._pl_preview, (B, prev)),
             "was_rotation": t(self._pl_was_rotation, (B,)),
             "srs": t(self._pl_srs, (B,)),
-            "lifetime": t(self._pl_lifetime, (B,)),
             "combo": t(self._pl_combo, (B,)),
             "b2b": t(self._pl_b2b, (B,)),
             "garbage": t(self._pl_garbage, (B,)),
@@ -289,7 +287,7 @@ def train(model, training_dir, data_loader, start_iter, end_iter):
 
             batch, label_policy, label_value, loss_scale, _ = data_loader._sample_placement(model.device)
             network_output = model.network(batch["board"], batch["current"], batch["hold"], batch["has_held"],
-                                           batch["preview"], batch["was_rotation"], batch["srs"], batch["lifetime"],
+                                           batch["preview"], batch["was_rotation"], batch["srs"],
                                            batch["combo"], batch["b2b"], batch["garbage"],
                                            batch["a_use_hold"], batch["a_lock_x"], batch["a_lock_y"],
                                            batch["a_orient"], batch["a_spin"], batch["a_piece"],

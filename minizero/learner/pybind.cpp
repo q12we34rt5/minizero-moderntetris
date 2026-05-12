@@ -89,7 +89,7 @@ PYBIND11_MODULE(minizero_py, m)
         // Mirrors network::kPlacementActionUpperBound (kept inline to avoid dragging torch into pybind TU).
         .def("placement_n_max", []() { return 256; })
         .def(
-            "sample_data_placement", [](learner::DataLoader& dl, py::array_t<float>& board, py::array_t<float>& policy, py::array_t<float>& value, py::array_t<float>& loss_scale, py::array_t<int>& sampled_index, py::array_t<int64_t>& current_piece, py::array_t<int64_t>& hold_piece, py::array_t<float>& has_held, py::array_t<int64_t>& preview, py::array_t<float>& was_rotation, py::array_t<int64_t>& srs_index, py::array_t<float>& lifetime, py::array_t<float>& combo, py::array_t<float>& back_to_back, py::array_t<float>& garbage, py::array_t<int64_t>& a_use_hold, py::array_t<int64_t>& a_lock_x, py::array_t<int64_t>& a_lock_y, py::array_t<int64_t>& a_orientation, py::array_t<int64_t>& a_spin, py::array_t<int64_t>& a_piece, py::array_t<int64_t>& a_lines, py::array_t<uint8_t>& a_mask, int n_max, int preview_size) {
+            "sample_data_placement", [](learner::DataLoader& dl, py::array_t<float>& board, py::array_t<float>& policy, py::array_t<float>& value, py::array_t<float>& loss_scale, py::array_t<int>& sampled_index, py::array_t<int64_t>& current_piece, py::array_t<int64_t>& hold_piece, py::array_t<float>& has_held, py::array_t<int64_t>& preview, py::array_t<float>& was_rotation, py::array_t<int64_t>& srs_index, py::array_t<float>& combo, py::array_t<float>& back_to_back, py::array_t<float>& garbage, py::array_t<int64_t>& a_use_hold, py::array_t<int64_t>& a_lock_x, py::array_t<int64_t>& a_lock_y, py::array_t<int64_t>& a_orientation, py::array_t<int64_t>& a_spin, py::array_t<int64_t>& a_piece, py::array_t<int64_t>& a_lines, py::array_t<uint8_t>& a_mask, int n_max, int preview_size) {
                 auto dp = dl.getSharedData()->getDataPtr();
                 dp->features_ = static_cast<float*>(board.request().ptr);
                 dp->policy_ = static_cast<float*>(policy.request().ptr);
@@ -102,7 +102,6 @@ PYBIND11_MODULE(minizero_py, m)
                 dp->placement_preview_ = static_cast<int64_t*>(preview.request().ptr);
                 dp->placement_was_rotation_ = static_cast<float*>(was_rotation.request().ptr);
                 dp->placement_srs_index_ = static_cast<int64_t*>(srs_index.request().ptr);
-                dp->placement_lifetime_ = static_cast<float*>(lifetime.request().ptr);
                 dp->placement_combo_ = static_cast<float*>(combo.request().ptr);
                 dp->placement_back_to_back_ = static_cast<float*>(back_to_back.request().ptr);
                 dp->placement_garbage_ = static_cast<float*>(garbage.request().ptr);

@@ -387,7 +387,6 @@ void DataLoaderThread::setPlacementTrainingData(int batch_index)
     }
     dp->placement_was_rotation_[batch_index] = g.was_rotation ? 1.0f : 0.0f;
     dp->placement_srs_index_[batch_index] = std::clamp(g.srs_index + 1, 0, 6);
-    dp->placement_lifetime_[batch_index] = 0.0f;
     dp->placement_combo_[batch_index] = std::clamp((g.combo_count + 1) / 10.0f, 0.0f, 1.0f);
     dp->placement_back_to_back_[batch_index] = g.back_to_back ? 1.0f : 0.0f;
     dp->placement_garbage_[batch_index] = std::clamp(g.pending_garbage / 20.0f, 0.0f, 1.0f);

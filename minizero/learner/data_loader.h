@@ -40,7 +40,6 @@ public:
     int64_t* placement_preview_ = nullptr;         // [B * preview_size]
     float* placement_was_rotation_ = nullptr;      // [B]
     int64_t* placement_srs_index_ = nullptr;       // [B]
-    float* placement_lifetime_ = nullptr;          // [B]
     float* placement_combo_ = nullptr;             // [B]
     float* placement_back_to_back_ = nullptr;      // [B]
     float* placement_garbage_ = nullptr;           // [B]
