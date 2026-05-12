@@ -104,7 +104,6 @@ void ModernTetrisPlacementEnv::reset(int seed)
     engine::step::setConfig(&ctx_, step_config);
     engine::step::setSeed(&ctx_, static_cast<std::uint32_t>(seed_), static_cast<std::uint32_t>(seed_ ^ 0x9e3779b9U));
     engine::step::reset(&ctx_);
-    resetActivePieceHistory();
     turn_ = Player::kPlayer1;
 }
 
@@ -156,7 +155,6 @@ bool ModernTetrisPlacementEnv::act(const ModernTetrisPlacementAction& action, bo
         }
     }
 
-    resetActivePieceHistory();
     placements_dirty_ = true;
 
     actions_.push_back(action);
@@ -266,59 +264,33 @@ bool ModernTetrisPlacementEnv::isTerminal() const
     return !ctx_.state.is_alive || static_cast<int>(actions_.size()) >= std::max(1, config::env_modern_tetris_max_episode_steps);
 }
 
-// --- Features (kept from original for now; M3 will rework) ---
+// --- Features ---
+//
+// The placement env feeds the placement_transformer network exclusively, which
+// reads getBoardFeatures() / getGlobalFeatures() / getActionDescriptors()
+// directly. The dense getFeatures()/getActionFeatures()/getChanceEventFeatures()
+// virtuals from the AlphaZero/MuZero base interface are therefore unreachable
+// here -- if anything ever invokes them we want a loud failure, not a
+// silently-zeroed plane.
 
-std::vector<float> ModernTetrisPlacementEnv::getFeatures(utils::Rotation rotation /*= utils::Rotation::kRotationNone*/) const
+std::vector<float> ModernTetrisPlacementEnv::getFeatures(utils::Rotation /*rotation*/) const
 {
-    const int preview_size = std::clamp(config::env_modern_tetris_num_preview_piece, 0, 14);
-    const int history_length = std::max(0, config::env_modern_tetris_history_length);
-    std::vector<float> features(getNumInputChannels() * kVisibleCellCount, 0.0f);
-
-    writeBoardFeatures(features);
-    int channel_offset = 2;
-    for (int i = 0; i < history_length; ++i) {
-        if (i >= static_cast<int>(active_piece_history_.size())) { break; }
-        std::copy(active_piece_history_[i].begin(),
-                  active_piece_history_[i].end(),
-                  features.begin() + (channel_offset + i) * kVisibleCellCount);
-    }
-
-    channel_offset += history_length;
-    writePieceFeatures(features, channel_offset, ctx_.state.current);
-    channel_offset += 7;
-    writePieceFeatures(features, channel_offset, ctx_.state.hold);
-    channel_offset += 7;
-    for (int i = 0; i < preview_size; ++i) {
-        writePieceFeatures(features, channel_offset + i * 7, ctx_.state.next[i]);
-    }
-
-    const int status_channel = channel_offset + preview_size * 7;
-    fillScalarPlane(features, status_channel + 0, ctx_.state.has_held ? 1.0f : 0.0f);
-    fillScalarPlane(features, status_channel + 1, ctx_.state.was_last_rotation ? 1.0f : 0.0f);
-    fillOneHotPlane(features, status_channel + 2, 7, std::clamp(static_cast<int>(ctx_.state.srs_index) + 1, 0, 6));
-    fillScalarPlane(features, status_channel + 9, 0.0f);
-    fillScalarPlane(features, status_channel + 10, std::clamp(static_cast<float>(ctx_.state.combo_count + 1) / 10.0f, 0.0f, 1.0f));
-    fillScalarPlane(features, status_channel + 11, ctx_.state.back_to_back_count > 0 ? 1.0f : 0.0f);
-    int pending_garbage = 0;
-    for (int i = 0; i < engine::GARBAGE_QUEUE_SIZE; ++i) { pending_garbage += ctx_.state.garbage_queue[i]; }
-    fillScalarPlane(features, status_channel + 12, std::clamp(static_cast<float>(pending_garbage) / 20.0f, 0.0f, 1.0f));
-
-    return features;
+    throw std::runtime_error{"ModernTetrisPlacementEnv::getFeatures() is not implemented; placement env uses getBoardFeatures()/getGlobalFeatures()/getActionDescriptors()"};
 }
 
-std::vector<float> ModernTetrisPlacementEnv::getActionFeatures(const ModernTetrisPlacementAction& action, utils::Rotation rotation /*= utils::Rotation::kRotationNone*/) const
+std::vector<float> ModernTetrisPlacementEnv::getActionFeatures(const ModernTetrisPlacementAction& /*action*/, utils::Rotation /*rotation*/) const
 {
-    return std::vector<float>(kVisibleCellCount, 1.0f);
+    throw std::runtime_error{"ModernTetrisPlacementEnv::getActionFeatures() is not implemented"};
 }
 
-std::vector<float> ModernTetrisPlacementEnv::getChanceEventFeatures(const ModernTetrisPlacementAction& event, utils::Rotation rotation /*= utils::Rotation::kRotationNone*/) const
+std::vector<float> ModernTetrisPlacementEnv::getChanceEventFeatures(const ModernTetrisPlacementAction& /*event*/, utils::Rotation /*rotation*/) const
 {
-    return std::vector<float>(kVisibleCellCount, 1.0f);
+    throw std::runtime_error{"ModernTetrisPlacementEnv::getChanceEventFeatures() is not implemented"};
 }
 
 int ModernTetrisPlacementEnv::getNumInputChannels() const
 {
-    return getChannelCount(std::clamp(config::env_modern_tetris_num_preview_piece, 0, 14), std::max(0, config::env_modern_tetris_history_length));
+    return kPlacementBoardChannels;
 }
 
 std::string ModernTetrisPlacementEnv::toString() const
@@ -424,53 +396,6 @@ bool ModernTetrisPlacementEnv::isOccupied(engine::Cell cell)
     return cell != engine::Cell::EMPTY;
 }
 
-int ModernTetrisPlacementEnv::getChannelCount(int preview_size, int history_length)
-{
-    return 2 + history_length + 7 + 7 + preview_size * 7 + 13;
-}
-
-void ModernTetrisPlacementEnv::resetActivePieceHistory()
-{
-    active_piece_history_.clear();
-}
-
-void ModernTetrisPlacementEnv::writeBoardFeatures(std::vector<float>& features) const
-{
-    for (int y = engine::BOARD_TOP; y <= engine::BOARD_BOTTOM; ++y) {
-        for (int x = engine::BOARD_LEFT; x <= engine::BOARD_RIGHT; ++x) {
-            const int local_x = x - engine::BOARD_LEFT;
-            const int local_y = y - engine::BOARD_TOP;
-            const int position = local_y * kModernTetrisPlacementBoardWidth + local_x;
-            if (isOccupied(engine::ops::getCell(ctx_.state.board, x, y))) { features[position] = 1.0f; }
-        }
-    }
-    // no active piece plane in placement mode (piece gets locked immediately)
-}
-
-void ModernTetrisPlacementEnv::writePieceFeatures(std::vector<float>& features, int channel_offset, engine::PieceType piece_type) const
-{
-    const int piece_index = toPieceIndex(piece_type);
-    if (piece_index < 0 || piece_index >= 7) { return; }
-    std::fill(features.begin() + (channel_offset + piece_index) * kVisibleCellCount,
-              features.begin() + (channel_offset + piece_index + 1) * kVisibleCellCount,
-              1.0f);
-}
-
-void ModernTetrisPlacementEnv::fillScalarPlane(std::vector<float>& features, int channel, float value) const
-{
-    std::fill(features.begin() + channel * kVisibleCellCount,
-              features.begin() + (channel + 1) * kVisibleCellCount,
-              value);
-}
-
-void ModernTetrisPlacementEnv::fillOneHotPlane(std::vector<float>& features, int channel_offset, int size, int index) const
-{
-    if (index < 0 || index >= size) { return; }
-    std::fill(features.begin() + (channel_offset + index) * kVisibleCellCount,
-              features.begin() + (channel_offset + index + 1) * kVisibleCellCount,
-              1.0f);
-}
-
 engine::step::Action ModernTetrisPlacementEnv::placementActionToStepAction(engine::PlacementAction pa)
 {
     switch (pa) {
@@ -488,20 +413,24 @@ engine::step::Action ModernTetrisPlacementEnv::placementActionToStepAction(engin
 }
 
 // --- EnvLoader ---
+//
+// Same rationale as the env-side feature stubs: placement training reads
+// board/global/per-action tensors directly via setPlacementTrainingData(),
+// never these AlphaZero/MuZero-shaped getters.
 
-std::vector<float> ModernTetrisPlacementEnvLoader::getActionFeatures(const int pos, utils::Rotation rotation /*= utils::Rotation::kRotationNone*/) const
+std::vector<float> ModernTetrisPlacementEnvLoader::getActionFeatures(const int /*pos*/, utils::Rotation /*rotation*/) const
 {
-    return std::vector<float>(kVisibleCellCount, 1.0f);
+    throw std::runtime_error{"ModernTetrisPlacementEnvLoader::getActionFeatures() is not implemented"};
 }
 
-std::vector<float> ModernTetrisPlacementEnvLoader::getChanceEventFeatures(const int pos, utils::Rotation rotation /*= utils::Rotation::kRotationNone*/) const
+std::vector<float> ModernTetrisPlacementEnvLoader::getChanceEventFeatures(const int /*pos*/, utils::Rotation /*rotation*/) const
 {
-    return ModernTetrisPlacementEnv().getChanceEventFeatures(ModernTetrisPlacementAction(kPlacementChanceEventId, Player::kPlayerNone), rotation);
+    throw std::runtime_error{"ModernTetrisPlacementEnvLoader::getChanceEventFeatures() is not implemented"};
 }
 
-std::vector<float> ModernTetrisPlacementEnvLoader::getChance(const int pos, utils::Rotation rotation /*= utils::Rotation::kRotationNone*/) const
+std::vector<float> ModernTetrisPlacementEnvLoader::getChance(const int /*pos*/, utils::Rotation /*rotation*/) const
 {
-    return std::vector<float>(kModernTetrisPlacementChanceEventSize, 1.0f);
+    throw std::runtime_error{"ModernTetrisPlacementEnvLoader::getChance() is not implemented"};
 }
 
 float ModernTetrisPlacementEnvLoader::calculateNStepValue(const int pos) const

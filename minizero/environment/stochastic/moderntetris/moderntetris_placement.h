@@ -4,7 +4,6 @@
 #include "engine/step.hpp"
 #include "stochastic_env.h"
 #include <cmath>
-#include <deque>
 #include <string>
 #include <vector>
 
@@ -37,7 +36,6 @@ struct PlacementActionDescriptor {
 
 constexpr char kModernTetrisPlacementName[] = "moderntetris_placement";
 constexpr int kModernTetrisPlacementNumPlayer = 1;
-constexpr int kModernTetrisPlacementBoardSize = 10;
 constexpr int kModernTetrisPlacementBoardWidth = engine::BOARD_RIGHT - engine::BOARD_LEFT + 1;
 constexpr int kModernTetrisPlacementBoardHeight = engine::BOARD_BOTTOM - engine::BOARD_TOP + 1;
 constexpr int kModernTetrisPlacementChanceEventSize = 1;
@@ -46,7 +44,6 @@ constexpr int kModernTetrisPlacementDiscreteValueSize = 601;
 // Placement-transformer specific: board tokens only carry locked cells (scheme A).
 // Current piece / hold / preview are delivered via global tokens.
 constexpr int kPlacementBoardChannels = 1;
-constexpr int kPlacementPatchSize = 5;
 
 constexpr int kPackX = 16;
 constexpr int kPackY = 32;
@@ -163,18 +160,11 @@ private:
     void rebuildLegalPlacements() const;
     static int toPieceIndex(engine::PieceType piece_type);
     static bool isOccupied(engine::Cell cell);
-    static int getChannelCount(int preview_size, int history_length);
-    void resetActivePieceHistory();
-    void writeBoardFeatures(std::vector<float>& features) const;
-    void writePieceFeatures(std::vector<float>& features, int channel_offset, engine::PieceType piece_type) const;
-    void fillScalarPlane(std::vector<float>& features, int channel, float value) const;
-    void fillOneHotPlane(std::vector<float>& features, int channel_offset, int size, int index) const;
 
     static engine::step::Action placementActionToStepAction(engine::PlacementAction pa);
 
 private:
     engine::step::Context ctx_;
-    std::deque<std::vector<float>> active_piece_history_;
     float reward_ = 0.0f;
     float total_reward_ = 0.0f;
     float reward_prev_potential_ = 0.0f;
