@@ -4,9 +4,13 @@ import type { GameView } from '../engine/view.ts';
 import { InputController, DEFAULT_SETTINGS, Action, type InputSettings } from '../input/keyboard.ts';
 import { AiClient, type AiConnectionStatus } from '../ai/client.ts';
 
-export type GameMode = 'single' | 'pve';
-export type GameStatus = 'loading' | 'playing' | 'gameover';
-export type Winner = 'player' | 'ai' | null;
+export type GameMode = 'single' | 'pve' | 'eve';
+export type GameStatus = 'loading' | 'playing' | 'paused' | 'gameover';
+/** Which board won: 'A' (left) or 'B' (right); null = no opponent (single). */
+export type Winner = 'A' | 'B' | null;
+
+/** How a board is driven. */
+type Control = 'human' | 'ai' | 'none';
 
 export interface GameHud {
   view: GameView;
@@ -17,13 +21,15 @@ export interface GameHud {
 export interface PveSettings {
   aiIntervalMs: number;
   garbageDelay: number;
-  backendUrl: string;
+  backendUrlA: string;
+  backendUrlB: string;
 }
 
 const DEFAULT_PVE: PveSettings = {
   aiIntervalMs: 400,
   garbageDelay: 1,
-  backendUrl: 'ws://localhost:8001',
+  backendUrlA: 'ws://localhost:8001',
+  backendUrlB: 'ws://localhost:8001',
 };
 
 const SETTINGS_KEY = 'moderntetris-web-settings';
@@ -47,22 +53,10 @@ function save(key: string, value: unknown) {
   }
 }
 
-export interface UseGame {
-  mode: GameMode;
-  setMode: (m: GameMode) => void;
-  status: GameStatus;
-  winner: Winner;
-  hud: GameHud | null;
-  aiHud: GameHud | null;
-  aiStatus: AiConnectionStatus;
-  settings: InputSettings;
-  setSettings: (s: InputSettings) => void;
-  pveSettings: PveSettings;
-  setPveSettings: (s: PveSettings) => void;
-  seed: string;
-  setSeed: (s: string) => void;
-  reset: () => void;
-  reconnectAi: () => void;
+function controlsForMode(m: GameMode): [Control, Control] {
+  if (m === 'single') return ['human', 'none'];
+  if (m === 'pve') return ['human', 'ai'];
+  return ['ai', 'ai'];
 }
 
 /** Per-board running stats (pieces-per-second, attack-per-minute). */
@@ -89,13 +83,45 @@ function makeHud(view: GameView, clock: BoardClock): GameHud {
   return { view, pps, apm };
 }
 
+/** Runtime state for one board (A = left, B = right). */
+interface BoardRuntime {
+  id: 'A' | 'B';
+  engine: Engine;
+  client: AiClient;
+  control: Control;
+  clock: BoardClock;
+  pending: boolean; // an AI request is in flight
+  lastRequest: number;
+}
+
+export interface UseGame {
+  mode: GameMode;
+  setMode: (m: GameMode) => void;
+  status: GameStatus;
+  winner: Winner;
+  hud: GameHud | null;
+  aiHud: GameHud | null;
+  aiStatusA: AiConnectionStatus;
+  aiStatusB: AiConnectionStatus;
+  settings: InputSettings;
+  setSettings: (s: InputSettings) => void;
+  pveSettings: PveSettings;
+  setPveSettings: (s: PveSettings) => void;
+  seed: string;
+  setSeed: (s: string) => void;
+  reset: () => void;
+  reconnectAi: () => void;
+  togglePause: () => void;
+}
+
 export function useGame(): UseGame {
   const [mode, setModeState] = useState<GameMode>('single');
   const [status, setStatus] = useState<GameStatus>('loading');
   const [winner, setWinner] = useState<Winner>(null);
   const [hud, setHud] = useState<GameHud | null>(null);
   const [aiHud, setAiHud] = useState<GameHud | null>(null);
-  const [aiStatus, setAiStatus] = useState<AiConnectionStatus>('disconnected');
+  const [aiStatusA, setAiStatusA] = useState<AiConnectionStatus>('disconnected');
+  const [aiStatusB, setAiStatusB] = useState<AiConnectionStatus>('disconnected');
   const [settings, setSettingsState] = useState<InputSettings>(() => load(SETTINGS_KEY, DEFAULT_SETTINGS));
   const [pveSettings, setPveSettingsState] = useState<PveSettings>(() => load(PVE_KEY, DEFAULT_PVE));
   const [seed, setSeedState] = useState('');
@@ -109,6 +135,7 @@ export function useGame(): UseGame {
   // Filled in by the init effect.
   const resetRef = useRef<() => void>(() => {});
   const reconnectRef = useRef<() => void>(() => {});
+  const pauseRef = useRef<() => void>(() => {});
 
   const setSettings = useCallback((s: InputSettings) => {
     settingsRef.current = s;
@@ -129,83 +156,173 @@ export function useGame(): UseGame {
 
   const reset = useCallback(() => resetRef.current(), []);
   const reconnectAi = useCallback(() => reconnectRef.current(), []);
+  const togglePause = useCallback(() => pauseRef.current(), []);
 
   const setMode = useCallback((m: GameMode) => {
     modeRef.current = m;
     setModeState(m);
-    // Switching mode starts a fresh game in that mode.
-    resetRef.current();
+    resetRef.current(); // switching mode starts a fresh game in that mode
   }, []);
 
   useEffect(() => {
     let cancelled = false;
     let raf = 0;
-    let playerEngine: Engine | null = null;
-    let aiEngine: Engine | null = null;
-    let input: InputController | null = null;
-    const aiClient = new AiClient();
-
-    // Mutable loop state.
     let gen = 0; // bumped on every reset; stale async AI responses are dropped
-    let playerClock = newClock();
-    let aiClock = newClock();
-    let aiPending = false;
-    let aiLastRequest = 0;
+    let boardA: BoardRuntime | null = null;
+    let boardB: BoardRuntime | null = null;
+    let input: InputController | null = null;
+
+    const clientA = new AiClient();
+    const clientB = new AiClient();
+    const offA = clientA.onStatus(setAiStatusA);
+    const offB = clientB.onStatus(setAiStatusB);
 
     const setStatusBoth = (s: GameStatus) => {
       statusRef.current = s;
       setStatus(s);
     };
 
-    const offStatus = aiClient.onStatus((s) => setAiStatus(s));
-
     const endGame = (w: Winner) => {
+      if (statusRef.current === 'gameover') return;
       setStatusBoth('gameover');
       setWinner(w);
       input?.setEnabled(false);
     };
 
-    Promise.all([Engine.create(), Engine.create()]).then(([pe, ae]) => {
+    Promise.all([Engine.create(), Engine.create()]).then(([ea, eb]) => {
       if (cancelled) {
-        pe.dispose();
-        ae.dispose();
+        ea.dispose();
+        eb.dispose();
         return;
       }
-      playerEngine = pe;
-      aiEngine = ae;
+      boardA = { id: 'A', engine: ea, client: clientA, control: 'human', clock: newClock(), pending: false, lastRequest: 0 };
+      boardB = { id: 'B', engine: eb, client: clientB, control: 'none', clock: newClock(), pending: false, lastRequest: 0 };
+
+      const garbageDelay = () => pveSettingsRef.current.garbageDelay;
+      const sendGarbage = (lines: number, opponent: BoardRuntime) => {
+        if (lines > 0 && opponent.control !== 'none') opponent.engine.addGarbage(lines, garbageDelay());
+      };
+
+      // One AI placement request -> apply -> exchange garbage -> death check.
+      const aiTick = (board: BoardRuntime, opponent: BoardRuntime, now: number) => {
+        if (board.control !== 'ai' || board.client.status !== 'connected' || board.pending) return;
+        if (now - board.lastRequest < pveSettingsRef.current.aiIntervalMs) return;
+        board.pending = true;
+        board.lastRequest = now;
+        const requestGen = gen;
+        const state = board.engine.serializeFull();
+        board.client
+          .requestMove(state)
+          .then((placement) => {
+            board.pending = false;
+            if (cancelled || requestGen !== gen || statusRef.current !== 'playing') return;
+            const loser: Winner = opponent.control === 'none' ? null : opponent.id;
+            if (placement === null || !board.engine.applyPlacement(placement)) {
+              endGame(loser); // resigned / topped out / illegal move
+              return;
+            }
+            const av = board.engine.read();
+            if (!board.clock.firstPiece) {
+              board.clock.firstPiece = true;
+              board.clock.startTime = performance.now();
+            }
+            board.clock.pieceCount = av.pieceCount;
+            sendGarbage(av.linesSent, opponent);
+            if (!av.isAlive) endGame(loser);
+          })
+          .catch(() => {
+            board.pending = false; // backend/connection error -> status chip shows it
+          });
+      };
+
+      // Keyboard-driven board: collect actions, step, exchange garbage on lock.
+      const runHumanBoard = (board: BoardRuntime, opponent: BoardRuntime, now: number) => {
+        if (!input) return;
+        const actions = input.collect(now);
+        for (const a of actions) {
+          board.engine.step(a);
+          if (a !== Action.HARD_DROP) continue;
+          const v = board.engine.read();
+          if (v.pieceCount <= board.clock.pieceCount) continue;
+          board.clock.pieceCount = v.pieceCount;
+          if (!board.clock.firstPiece) {
+            board.clock.firstPiece = true;
+            board.clock.startTime = now;
+          }
+          sendGarbage(v.linesSent, opponent);
+          for (const e of input.onNewPiece(now)) board.engine.step(e);
+        }
+        if (!board.engine.read().isAlive) {
+          endGame(opponent.control === 'none' ? null : opponent.id);
+        }
+      };
+
+      const syncClient = (board: BoardRuntime, url: string) => {
+        if (board.control === 'ai') {
+          if (board.client.status === 'disconnected') board.client.connect(url);
+        } else {
+          board.client.disconnect();
+        }
+      };
 
       const doReset = () => {
-        if (!playerEngine || !input) return;
+        if (!boardA || !boardB || !input) return;
         gen++;
+        const m = modeRef.current;
+        const [cA, cB] = controlsForMode(m);
+        boardA.control = cA;
+        boardB.control = cB;
+
         const trimmed = seedRef.current.trim();
         const parsed = trimmed === '' ? NaN : Number(trimmed);
-        const useSeed = Number.isFinite(parsed) ? parsed >>> 0 : (Math.random() * 0x100000000) >>> 0;
+        const seedA = Number.isFinite(parsed) ? parsed >>> 0 : (Math.random() * 0x100000000) >>> 0;
+        // pve: both boards share the bag (fair race). eve: derive a distinct
+        // seed for B so a same-model match still diverges into a real game.
+        const seedB = m === 'eve' ? (seedA ^ 0x5bd1e995) >>> 0 : seedA;
 
-        playerEngine.setConfig(0, false); // piece_life disabled, client-side gravity
-        playerEngine.reset(useSeed);
+        boardA.engine.setConfig(0, false); // piece_life disabled, client-side gravity
+        boardA.engine.reset(seedA);
+        boardA.clock = newClock();
+        boardA.pending = false;
+        boardA.lastRequest = 0;
+
+        if (cB !== 'none') {
+          boardB.engine.setConfig(0, false);
+          boardB.engine.reset(seedB);
+          boardB.clock = newClock();
+          boardB.pending = false;
+          boardB.lastRequest = 0;
+        }
+
+        syncClient(boardA, pveSettingsRef.current.backendUrlA);
+        syncClient(boardB, pveSettingsRef.current.backendUrlB);
+
         const now = performance.now();
         input.reset(now);
-        input.setEnabled(true);
-        playerClock = newClock();
-
-        if (modeRef.current === 'pve' && aiEngine) {
-          aiEngine.setConfig(0, false);
-          aiEngine.reset(useSeed); // same bag sequence -> fair race
-          aiClock = newClock();
-          aiPending = false;
-          aiLastRequest = 0;
-          if (aiClient.status === 'disconnected') aiClient.connect(pveSettingsRef.current.backendUrl);
-          setAiHud(makeHud(aiEngine.read(), aiClock));
-        } else {
-          setAiHud(null);
-        }
+        input.setEnabled(cA === 'human');
 
         setWinner(null);
         setStatusBoth('playing');
-        setHud(makeHud(playerEngine.read(), playerClock));
+        setHud(makeHud(boardA.engine.read(), boardA.clock));
+        setAiHud(cB !== 'none' ? makeHud(boardB.engine.read(), boardB.clock) : null);
       };
       resetRef.current = doReset;
-      reconnectRef.current = () => aiClient.connect(pveSettingsRef.current.backendUrl);
+
+      reconnectRef.current = () => {
+        if (!boardA || !boardB) return;
+        if (boardA.control === 'ai') boardA.client.connect(pveSettingsRef.current.backendUrlA);
+        if (boardB.control === 'ai') boardB.client.connect(pveSettingsRef.current.backendUrlB);
+      };
+
+      pauseRef.current = () => {
+        if (statusRef.current === 'playing') {
+          setStatusBoth('paused');
+          input?.setEnabled(false);
+        } else if (statusRef.current === 'paused') {
+          setStatusBoth('playing');
+          if (boardA && boardA.control === 'human') input?.setEnabled(true);
+        }
+      };
 
       input = new InputController({
         getSettings: () => settingsRef.current,
@@ -215,75 +332,17 @@ export function useGame(): UseGame {
 
       const loop = () => {
         raf = requestAnimationFrame(loop);
-        if (statusRef.current !== 'playing' || !playerEngine || !input) return;
+        if (statusRef.current !== 'playing' || !boardA || !boardB) return;
         const now = performance.now();
-        const pve = modeRef.current === 'pve';
 
-        // --- player board (step-level, keyboard) ---
-        const actions = input.collect(now);
-        for (const a of actions) {
-          playerEngine.step(a);
-          if (a !== Action.HARD_DROP) continue;
-          const v = playerEngine.read();
-          if (v.pieceCount <= playerClock.pieceCount) continue;
-          playerClock.pieceCount = v.pieceCount;
-          if (!playerClock.firstPiece) {
-            playerClock.firstPiece = true;
-            playerClock.startTime = now;
-          }
-          if (pve && aiEngine && v.linesSent > 0) {
-            aiEngine.addGarbage(v.linesSent, pveSettingsRef.current.garbageDelay);
-          }
-          for (const e of input.onNewPiece(now)) playerEngine.step(e);
-        }
-        const playerView = playerEngine.read();
-        // Publish every frame so the garbage queue indicator stays current even
-        // when garbage arrives from the AI while the player is idle.
-        setHud(makeHud(playerView, playerClock));
-        if (pve && aiEngine) setAiHud(makeHud(aiEngine.read(), aiClock));
-        if (!playerView.isAlive) {
-          endGame(pve ? 'ai' : null);
-          return;
-        }
+        if (boardA.control === 'human') runHumanBoard(boardA, boardB, now);
+        else if (boardA.control === 'ai') aiTick(boardA, boardB, now);
+        if (boardB.control === 'ai') aiTick(boardB, boardA, now);
 
-        // --- AI board (placement-level, backend-driven) ---
-        if (
-          pve &&
-          aiEngine &&
-          aiClient.status === 'connected' &&
-          !aiPending &&
-          now - aiLastRequest >= pveSettingsRef.current.aiIntervalMs
-        ) {
-          aiPending = true;
-          aiLastRequest = now;
-          const requestGen = gen;
-          const state = aiEngine.serializeFull();
-          aiClient
-            .requestMove(state)
-            .then((placement) => {
-              aiPending = false;
-              if (cancelled || requestGen !== gen || statusRef.current !== 'playing' || !aiEngine || !playerEngine) {
-                return;
-              }
-              if (placement === null || !aiEngine.applyPlacement(placement)) {
-                endGame('player'); // AI resigned / topped out / illegal move
-                return;
-              }
-              const av = aiEngine.read();
-              if (!aiClock.firstPiece) {
-                aiClock.firstPiece = true;
-                aiClock.startTime = performance.now();
-              }
-              aiClock.pieceCount = av.pieceCount;
-              if (av.linesSent > 0) playerEngine.addGarbage(av.linesSent, pveSettingsRef.current.garbageDelay);
-              setAiHud(makeHud(av, aiClock));
-              if (!av.isAlive) endGame('player');
-            })
-            .catch(() => {
-              aiPending = false;
-              // connection/backend error -> stop ticking; status chip shows it
-            });
-        }
+        // Publish every frame so stats / garbage meters stay current even when
+        // a board is idle (e.g. garbage arriving from the opponent).
+        setHud(makeHud(boardA.engine.read(), boardA.clock));
+        setAiHud(boardB.control !== 'none' ? makeHud(boardB.engine.read(), boardB.clock) : null);
       };
 
       doReset();
@@ -293,11 +352,13 @@ export function useGame(): UseGame {
     return () => {
       cancelled = true;
       cancelAnimationFrame(raf);
-      offStatus();
-      aiClient.disconnect();
+      offA();
+      offB();
+      clientA.disconnect();
+      clientB.disconnect();
       input?.detach();
-      playerEngine?.dispose();
-      aiEngine?.dispose();
+      boardA?.engine.dispose();
+      boardB?.engine.dispose();
     };
   }, []);
 
@@ -308,7 +369,8 @@ export function useGame(): UseGame {
     winner,
     hud,
     aiHud,
-    aiStatus,
+    aiStatusA,
+    aiStatusB,
     settings,
     setSettings,
     pveSettings,
@@ -317,5 +379,6 @@ export function useGame(): UseGame {
     setSeed,
     reset,
     reconnectAi,
+    togglePause,
   };
 }
