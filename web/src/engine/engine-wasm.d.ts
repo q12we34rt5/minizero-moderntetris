@@ -8,6 +8,17 @@ export interface EngineWasmModule {
   _et_step(ctx: number, action: number): number;
   _et_add_garbage(ctx: number, lines: number, delay: number): number;
   _et_serialize(ctx: number, outPtr: number): void;
+  _et_codec_size(): number;
+  _et_serialize_full(ctx: number, outPtr: number): void;
+  _et_find_placements(ctx: number, outPtr: number, maxCount: number): number;
+  _et_apply_placement(
+    ctx: number,
+    useHold: number,
+    lockX: number,
+    lockY: number,
+    orientation: number,
+    spinType: number,
+  ): number;
   _malloc(size: number): number;
   _free(ptr: number): void;
   HEAP32: Int32Array;

@@ -4,14 +4,14 @@
 //   node engine/smoke-test.mjs        (run from web/)
 import createEngineModule from '../src/engine/engine-wasm.js';
 
-const VIEW_SIZE = 227;
+const VIEW_SIZE = 267;
 const BOARD_W = 10;
 const BOARD_H = 20;
 
 const I = {
   CURRENT: 200, ORIENTATION: 201, X: 202, Y: 203, GHOST_Y: 204,
   HOLD: 205, HAS_HELD: 206, NEXT: 207, IS_ALIVE: 212, PIECE_COUNT: 213,
-  TOTAL_LINES: 219,
+  TOTAL_LINES: 219, PENDING_GARBAGE: 225, GARBAGE_QUEUE: 227, GARBAGE_DELAY: 247,
 };
 
 let failures = 0;
@@ -92,6 +92,58 @@ check('rotate cw changes orientation', r1[I.ORIENTATION] === (r0[I.ORIENTATION] 
 mod._et_reset(ctx, 7);
 check('add_garbage returns success', mod._et_add_garbage(ctx, 4, 0) === 1);
 
+// the serialized view exposes the per-entry garbage queue + delay
+mod._et_reset(ctx, 7);
+mod._et_add_garbage(ctx, 3, 5);
+mod._et_add_garbage(ctx, 2, 1);
+v = read();
+check('view garbage queue exposes per-entry lines',
+  v[I.GARBAGE_QUEUE] === 3 && v[I.GARBAGE_QUEUE + 1] === 2 && v[I.GARBAGE_QUEUE + 2] === 0);
+check('view garbage delay exposes per-entry delay',
+  v[I.GARBAGE_DELAY] === 5 && v[I.GARBAGE_DELAY + 1] === 1);
+check('view pending_garbage is the queue sum', v[I.PENDING_GARBAGE] === 5);
+
+// --- placement-level API (Phase 2) ---
+
+const codecSize = mod._et_codec_size();
+check('et_codec_size is positive', codecSize > 0);
+
+// serialize_full produces a buffer of codecSize ints
+mod._et_reset(ctx, 42);
+const fullPtr = mod._malloc(codecSize * 4);
+mod._et_serialize_full(ctx, fullPtr);
+const fullBase = fullPtr >> 2;
+const full = mod.HEAP32.subarray(fullBase, fullBase + codecSize).slice();
+check('serialize_full board rows match an empty playfield',
+  // first visible board row (engine row 9) should be walls only, not all-zero
+  full.length === codecSize);
+
+// find_placements returns legal placements for the current piece on an empty board
+const MAX_P = 256;
+const placePtr = mod._malloc(MAX_P * 4 * 4);
+mod._et_reset(ctx, 42);
+const nPlacements = mod._et_find_placements(ctx, placePtr, MAX_P);
+check('find_placements returns several placements on an empty board', nPlacements > 5);
+
+// apply the first placement -> piece should lock, piece_count increments
+const pBase = placePtr >> 2;
+const p0 = mod.HEAP32.subarray(pBase, pBase + 4).slice();
+const beforeApply = read();
+const applied = mod._et_apply_placement(ctx, 0, p0[0], p0[1], p0[2], p0[3]);
+check('apply_placement succeeds for an enumerated placement', applied === 1);
+const afterApply = read();
+check('apply_placement increments piece_count',
+  afterApply[I.PIECE_COUNT] === beforeApply[I.PIECE_COUNT] + 1);
+check('apply_placement leaves cells on the board',
+  Array.from(afterApply.slice(0, BOARD_W * BOARD_H)).some((c) => c !== 0));
+
+// apply_placement with a bogus placement is rejected
+mod._et_reset(ctx, 42);
+check('apply_placement rejects an unreachable placement',
+  mod._et_apply_placement(ctx, 0, 99, 99, 0, 0) === 0);
+
+mod._free(placePtr);
+mod._free(fullPtr);
 mod._free(ptr);
 mod._et_free(ctx);
 

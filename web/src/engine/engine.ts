@@ -6,26 +6,41 @@ export interface StepResult {
   forcedHardDrop: boolean;
 }
 
+/** A placement-level move. lockX/lockY are engine board coordinates. */
+export interface Placement {
+  useHold: boolean;
+  lockX: number;
+  lockY: number;
+  orientation: number;
+  spinType: number;
+}
+
+const MAX_PLACEMENTS = 512;
+
 /**
  * Thin wrapper around the WASM moderntetris engine. Owns one engine context
- * (one board / one player) plus a scratch buffer for serialized views.
+ * (one board / one player) plus scratch buffers for serialized output.
  */
 export class Engine {
   private readonly mod: EngineWasmModule;
   private readonly ctx: number;
   private readonly viewPtr: number;
+  private readonly fullPtr: number;
+  private readonly placementsPtr: number;
+  readonly codecSize: number;
 
-  private constructor(mod: EngineWasmModule, ctx: number, viewPtr: number) {
+  private constructor(mod: EngineWasmModule, ctx: number) {
     this.mod = mod;
     this.ctx = ctx;
-    this.viewPtr = viewPtr;
+    this.codecSize = mod._et_codec_size();
+    this.viewPtr = mod._malloc(VIEW_SIZE * 4);
+    this.fullPtr = mod._malloc(this.codecSize * 4);
+    this.placementsPtr = mod._malloc(MAX_PLACEMENTS * 4 * 4);
   }
 
   static async create(): Promise<Engine> {
     const mod = await createEngineModule();
-    const ctx = mod._et_create();
-    const viewPtr = mod._malloc(VIEW_SIZE * 4);
-    return new Engine(mod, ctx, viewPtr);
+    return new Engine(mod, mod._et_create());
   }
 
   /** piece_life <= 0 disables the forced hard drop. */
@@ -46,14 +61,55 @@ export class Engine {
     return this.mod._et_add_garbage(this.ctx, lines, delay) !== 0;
   }
 
-  /** Serialize the current state into a fresh GameView. */
+  /** Serialize the current state into a fresh GameView (for rendering). */
   read(): GameView {
     this.mod._et_serialize(this.ctx, this.viewPtr);
     const base = this.viewPtr >> 2;
     return parseView(this.mod.HEAP32.subarray(base, base + VIEW_SIZE));
   }
 
+  /** Serialize the full engine context (for the AI backend). Returns a copy. */
+  serializeFull(): Int32Array {
+    this.mod._et_serialize_full(this.ctx, this.fullPtr);
+    const base = this.fullPtr >> 2;
+    return this.mod.HEAP32.slice(base, base + this.codecSize);
+  }
+
+  /** Enumerate legal placements for the current piece (no-hold branch only). */
+  findPlacements(): Placement[] {
+    const n = this.mod._et_find_placements(this.ctx, this.placementsPtr, MAX_PLACEMENTS);
+    const base = this.placementsPtr >> 2;
+    const raw = this.mod.HEAP32.subarray(base, base + n * 4);
+    const out: Placement[] = [];
+    for (let i = 0; i < n; i++) {
+      out.push({
+        useHold: false,
+        lockX: raw[i * 4 + 0],
+        lockY: raw[i * 4 + 1],
+        orientation: raw[i * 4 + 2],
+        spinType: raw[i * 4 + 3],
+      });
+    }
+    return out;
+  }
+
+  /** Apply a placement-level move. Returns false if no matching placement exists. */
+  applyPlacement(p: Placement): boolean {
+    return (
+      this.mod._et_apply_placement(
+        this.ctx,
+        p.useHold ? 1 : 0,
+        p.lockX,
+        p.lockY,
+        p.orientation,
+        p.spinType,
+      ) !== 0
+    );
+  }
+
   dispose(): void {
+    this.mod._free(this.placementsPtr);
+    this.mod._free(this.fullPtr);
     this.mod._free(this.viewPtr);
     this.mod._et_free(this.ctx);
   }

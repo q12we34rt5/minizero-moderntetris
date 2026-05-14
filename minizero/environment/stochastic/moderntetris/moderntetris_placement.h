@@ -143,6 +143,13 @@ public:
     // it to run the engine's BFS on the mirrored board as ground truth; the
     // placement_mirror_verify console mode uses it the same way.
     const engine::State& getEngineState() const { return ctx_.state; }
+    const engine::step::Context& getEngineContext() const { return ctx_; }
+
+    // Inject a full engine context (board + pieces + garbage + config) directly,
+    // bypassing reset/act. Used by the console set_state command to serve AI
+    // moves for arbitrary boards (web PvE/EvE). Resets episode bookkeeping so the
+    // env behaves as a fresh root at the injected position.
+    void setState(const engine::step::Context& ctx);
 
     // Free the cached BFS placement results. Each cached entry carries a full
     // PlacementSearchResult (including the BFS path and final State), so the

@@ -4,6 +4,7 @@ export const BOARD_W = 10;
 export const BOARD_H = 20;
 export const BOARD_CELLS = BOARD_W * BOARD_H;
 export const NEXT_COUNT = 5;
+export const GARBAGE_SLOTS = 20; // engine GARBAGE_QUEUE_SIZE
 
 const I_BOARD = 0;
 const I_CURRENT = BOARD_CELLS;
@@ -29,9 +30,11 @@ const I_SRS_INDEX = I_IS_ALIVE + 11;
 const I_PERFECT_CLEAR = I_IS_ALIVE + 12;
 const I_PENDING_GARBAGE = I_IS_ALIVE + 13;
 const I_LIFETIME = I_IS_ALIVE + 14;
+const I_GARBAGE_QUEUE = I_LIFETIME + 1;
+const I_GARBAGE_DELAY = I_GARBAGE_QUEUE + GARBAGE_SLOTS;
 
 /** Number of int32 slots a serialized view occupies. */
-export const VIEW_SIZE = I_LIFETIME + 1;
+export const VIEW_SIZE = I_GARBAGE_DELAY + GARBAGE_SLOTS;
 
 /** Cell value in the board grid: 0 empty, 1 block, 3 garbage. */
 export type CellValue = 0 | 1 | 3;
@@ -60,14 +63,24 @@ export interface GameView {
   spinType: number; // 0 none, 1 spin, 2 mini
   srsIndex: number;
   perfectClear: boolean;
-  pendingGarbage: number;
+  pendingGarbage: number; // sum of garbageQueue
   lifetime: number;
+  /** Per-entry queued garbage lines, front of the queue first. */
+  garbageQueue: number[];
+  /** Per-entry garbage delay (in placements), aligned with garbageQueue. */
+  garbageDelay: number[];
 }
 
 /** Parse a serialized view (an Int32Array of length VIEW_SIZE) into a GameView. */
 export function parseView(raw: Int32Array): GameView {
   const next: number[] = [];
   for (let i = 0; i < NEXT_COUNT; i++) next.push(raw[I_NEXT + i]);
+  const garbageQueue: number[] = [];
+  const garbageDelay: number[] = [];
+  for (let i = 0; i < GARBAGE_SLOTS; i++) {
+    garbageQueue.push(raw[I_GARBAGE_QUEUE + i]);
+    garbageDelay.push(raw[I_GARBAGE_DELAY + i]);
+  }
   return {
     board: raw.slice(I_BOARD, I_BOARD + BOARD_CELLS),
     current: raw[I_CURRENT],
@@ -93,5 +106,7 @@ export function parseView(raw: Int32Array): GameView {
     perfectClear: raw[I_PERFECT_CLEAR] !== 0,
     pendingGarbage: raw[I_PENDING_GARBAGE],
     lifetime: raw[I_LIFETIME],
+    garbageQueue,
+    garbageDelay,
   };
 }

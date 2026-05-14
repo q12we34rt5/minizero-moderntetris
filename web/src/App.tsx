@@ -1,9 +1,7 @@
 import { useGame } from './game/useGame.ts';
-import { BoardCanvas } from './components/BoardCanvas.tsx';
-import { PiecePreview } from './components/PiecePreview.tsx';
+import { BoardPanel, type BoardOverlay } from './components/BoardPanel.tsx';
 import { SettingsPanel } from './components/SettingsPanel.tsx';
-import { NEXT_COUNT } from './engine/view.ts';
-import { SPIN_NAMES } from './data/pieces.ts';
+import { PveSettingsPanel } from './components/PveSettingsPanel.tsx';
 
 const KEYBINDS: [string, string][] = [
   ['←', 'Move Left'],
@@ -17,117 +15,86 @@ const KEYBINDS: [string, string][] = [
   ['R', 'Reset'],
 ];
 
-function Stat({ label, value, accent }: { label: string; value: string | number; accent?: boolean }) {
-  return (
-    <div className="stat-item">
-      <span className="stat-label">{label}</span>
-      <span className={accent ? 'stat-value accent' : 'stat-value'}>{value}</span>
-    </div>
-  );
-}
-
 export default function App() {
-  const { status, hud, settings, setSettings, seed, setSeed, reset } = useGame();
-  const view = hud?.view ?? null;
+  const game = useGame();
+  const { mode, status, winner, hud, aiHud } = game;
 
   const statusLabel =
     status === 'loading' ? 'Loading…' : status === 'playing' ? 'Playing' : 'Game Over';
+
+  // Per-board overlays.
+  let playerOverlay: BoardOverlay | null = null;
+  let aiOverlay: BoardOverlay | null = null;
+  if (status === 'loading') {
+    playerOverlay = { title: 'Loading', tone: 'neutral', sub: 'Compiling engine…' };
+    aiOverlay = playerOverlay;
+  } else if (status === 'gameover') {
+    if (mode === 'single') {
+      const v = hud?.view;
+      playerOverlay = {
+        title: 'GAME OVER',
+        tone: 'lose',
+        sub: v ? `Lines ${v.totalLinesCleared} · Attack ${v.totalAttack} · Pieces ${v.pieceCount}` : undefined,
+      };
+    } else {
+      const playerWon = winner === 'player';
+      playerOverlay = { title: playerWon ? 'YOU WIN' : 'YOU LOSE', tone: playerWon ? 'win' : 'lose' };
+      aiOverlay = { title: playerWon ? 'AI LOSES' : 'AI WINS', tone: playerWon ? 'lose' : 'win' };
+    }
+  }
 
   return (
     <>
       <header>
         <h1>ModernTetris — Web</h1>
-        <span className={`status-chip ${status}`}>{statusLabel}</span>
+        <div className="header-controls">
+          <div className="mode-toggle">
+            <button
+              className={`btn ${mode === 'single' ? 'btn-primary' : ''}`}
+              onClick={() => game.setMode('single')}
+            >
+              Single
+            </button>
+            <button
+              className={`btn ${mode === 'pve' ? 'btn-primary' : ''}`}
+              onClick={() => game.setMode('pve')}
+            >
+              PvE
+            </button>
+          </div>
+          <span className={`status-chip ${status}`}>{statusLabel}</span>
+        </div>
       </header>
 
       <main>
-        <div className="col-left">
-          <div className="panel hold-box">
-            <div className="panel-title">Hold</div>
-            <PiecePreview pieceType={view?.hold ?? -1} width={88} height={56} />
-          </div>
+        <BoardPanel label={mode === 'pve' ? 'You' : 'Player'} hud={hud} overlay={playerOverlay} />
+        {mode === 'pve' && <BoardPanel label="AI" hud={aiHud} overlay={aiOverlay} />}
 
-          <div className="panel">
-            <div className="panel-title">Run Stats</div>
-            <div className="stat-grid" style={{ gridTemplateColumns: '1fr' }}>
-              <Stat label="PPS" value={(hud?.pps ?? 0).toFixed(2)} />
-              <Stat label="APM" value={(hud?.apm ?? 0).toFixed(2)} />
-              <Stat label="Lines" value={view?.totalLinesCleared ?? 0} />
-              <Stat label="Attack" value={view?.totalAttack ?? 0} />
-            </div>
-          </div>
-
-          <div className="panel">
-            <div className="panel-title">Controls</div>
-            <div className="keybinds">
-              {KEYBINDS.map(([k, desc]) => (
-                <Keybind key={desc} k={k} desc={desc} />
-              ))}
-            </div>
-          </div>
-        </div>
-
-        <div className="center-column">
-          <div className="board-wrapper">
-            <BoardCanvas view={view} />
-            {status === 'loading' && (
-              <div className="overlay loading">
-                <h2>Loading</h2>
-                <p>Compiling engine…</p>
+        {mode === 'single' && (
+          <div className="col-right">
+            <div className="panel">
+              <div className="panel-title">Controls</div>
+              <div className="keybinds">
+                {KEYBINDS.map(([k, desc]) => (
+                  <Keybind key={desc} k={k} desc={desc} />
+                ))}
               </div>
-            )}
-            {status === 'gameover' && view && (
-              <div className="overlay">
-                <h2>GAME OVER</h2>
-                <p>
-                  Lines: {view.totalLinesCleared} · Attack: {view.totalAttack} · Pieces:{' '}
-                  {view.pieceCount}
-                </p>
-                <button className="btn btn-primary" onClick={reset}>
-                  Play Again (R)
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="col-right">
-          <div className="panel">
-            <div className="panel-title">Next</div>
-            <div className="next-queue">
-              {Array.from({ length: NEXT_COUNT }, (_, i) => (
-                <PiecePreview key={i} pieceType={view?.next[i] ?? -1} />
-              ))}
             </div>
           </div>
-
-          <div className="panel">
-            <div className="panel-title">Statistics</div>
-            <div className="stat-grid">
-              <Stat label="Lines" value={view?.totalLinesCleared ?? 0} />
-              <Stat label="Attack" value={view?.totalAttack ?? 0} />
-              <Stat label="Combo" value={view?.comboCount ?? 0} />
-              <Stat label="B2B" value={view?.b2bCount ?? 0} />
-              <Stat
-                label="Spin"
-                value={SPIN_NAMES[view?.spinType ?? 0] ?? 'NONE'}
-                accent={(view?.spinType ?? 0) > 0}
-              />
-              <Stat label="SRS Idx" value={view?.srsIndex ?? 0} />
-              <Stat label="Pieces" value={view?.pieceCount ?? 0} />
-              <Stat
-                label="Garbage"
-                value={view?.pendingGarbage ?? 0}
-                accent={(view?.pendingGarbage ?? 0) > 0}
-              />
-            </div>
-          </div>
-        </div>
+        )}
       </main>
 
       <div className="bottom-bar">
-        <SettingsPanel settings={settings} onChange={setSettings} />
-        <div className="panel" style={{ flex: 1, minWidth: 260 }}>
+        <SettingsPanel settings={game.settings} onChange={game.setSettings} />
+        {mode === 'pve' && (
+          <PveSettingsPanel
+            settings={game.pveSettings}
+            onChange={game.setPveSettings}
+            aiStatus={game.aiStatus}
+            onReconnect={game.reconnectAi}
+          />
+        )}
+        <div className="panel" style={{ flex: 1, minWidth: 220 }}>
           <div className="panel-title">Game</div>
           <div className="controls-row">
             <label htmlFor="seed-input">Seed</label>
@@ -136,13 +103,18 @@ export default function App() {
               type="text"
               className="seed-input"
               placeholder="random"
-              value={seed}
-              onChange={(e) => setSeed(e.target.value)}
+              value={game.seed}
+              onChange={(e) => game.setSeed(e.target.value)}
             />
-            <button className="btn btn-primary" onClick={reset}>
+            <button className="btn btn-primary" onClick={game.reset}>
               Reset
             </button>
           </div>
+          {mode === 'pve' && (
+            <p className="hint">
+              Both boards share the same piece sequence. Clear lines to send garbage to the AI.
+            </p>
+          )}
         </div>
       </div>
     </>

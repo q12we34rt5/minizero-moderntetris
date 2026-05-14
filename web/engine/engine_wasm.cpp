@@ -1,17 +1,19 @@
-// WASM wrapper around the moderntetris engine (step-level).
+// WASM wrapper around the moderntetris engine.
 //
-// Compiled by build.sh together with the in-tree engine source
-// (minizero/environment/stochastic/moderntetris/engine/tetris.cpp).
-// Phase 1 exposes the step-level API needed for local human play.
-// Placement-level APIs (findPlacements / applyPlacement) are added in
-// Phase 2 when the AI backend lands.
+// Compiled by build.sh together with the in-tree engine source (tetris.cpp +
+// placement_search.cpp). Exposes the step-level API for local human play plus
+// placement-level APIs (apply_placement) and full-state serialization
+// (serialize_full / codec) for the Phase 2 AI backend.
 
+#include "../../minizero/environment/stochastic/moderntetris/engine/placement_search.hpp"
+#include "../../minizero/environment/stochastic/moderntetris/engine/state_codec.hpp"
 #include "../../minizero/environment/stochastic/moderntetris/engine/step.hpp"
 #include <cstdint>
 #include <emscripten/emscripten.h>
 
 namespace eng = minizero::env::moderntetris::engine;
 namespace step = minizero::env::moderntetris::engine::step;
+namespace codec = minizero::env::moderntetris::engine::codec;
 
 // ---- Serialized view layout (flat int32 array, read by JS via Int32Array) ----
 // Keep in sync with web/src/engine/view.ts
@@ -20,33 +22,36 @@ enum : int {
     ET_BOARD_H = eng::BOARD_BOTTOM - eng::BOARD_TOP + 1, // 20
     ET_BOARD_CELLS = ET_BOARD_W * ET_BOARD_H,            // 200
     ET_NEXT_COUNT = 5,
+    ET_GARBAGE_SLOTS = eng::GARBAGE_QUEUE_SIZE, // 20
 };
 enum : int {
-    I_BOARD = 0,                         // [0..199]
-    I_CURRENT = ET_BOARD_CELLS,          // 200
-    I_ORIENTATION,                       // 201
-    I_X,                                 // 202
-    I_Y,                                 // 203
-    I_GHOST_Y,                           // 204
-    I_HOLD,                              // 205
-    I_HAS_HELD,                          // 206
-    I_NEXT,                              // 207..211
-    I_IS_ALIVE = I_NEXT + ET_NEXT_COUNT, // 212
-    I_PIECE_COUNT,                       // 213
-    I_COMBO_COUNT,                       // 214
-    I_B2B_COUNT,                         // 215
-    I_LINES_CLEARED,                     // 216
-    I_ATTACK,                            // 217
-    I_LINES_SENT,                        // 218
-    I_TOTAL_LINES_CLEARED,               // 219
-    I_TOTAL_ATTACK,                      // 220
-    I_TOTAL_LINES_SENT,                  // 221
-    I_SPIN_TYPE,                         // 222
-    I_SRS_INDEX,                         // 223
-    I_PERFECT_CLEAR,                     // 224
-    I_PENDING_GARBAGE,                   // 225
-    I_LIFETIME,                          // 226
-    ET_VIEW_SIZE,                        // 227
+    I_BOARD = 0,                                          // [0..199]
+    I_CURRENT = ET_BOARD_CELLS,                           // 200
+    I_ORIENTATION,                                        // 201
+    I_X,                                                  // 202
+    I_Y,                                                  // 203
+    I_GHOST_Y,                                            // 204
+    I_HOLD,                                               // 205
+    I_HAS_HELD,                                           // 206
+    I_NEXT,                                               // 207..211
+    I_IS_ALIVE = I_NEXT + ET_NEXT_COUNT,                  // 212
+    I_PIECE_COUNT,                                        // 213
+    I_COMBO_COUNT,                                        // 214
+    I_B2B_COUNT,                                          // 215
+    I_LINES_CLEARED,                                      // 216
+    I_ATTACK,                                             // 217
+    I_LINES_SENT,                                         // 218
+    I_TOTAL_LINES_CLEARED,                                // 219
+    I_TOTAL_ATTACK,                                       // 220
+    I_TOTAL_LINES_SENT,                                   // 221
+    I_SPIN_TYPE,                                          // 222
+    I_SRS_INDEX,                                          // 223
+    I_PERFECT_CLEAR,                                      // 224
+    I_PENDING_GARBAGE,                                    // 225
+    I_LIFETIME,                                           // 226
+    I_GARBAGE_QUEUE,                                      // 227..246  (per-entry queued lines)
+    I_GARBAGE_DELAY = I_GARBAGE_QUEUE + ET_GARBAGE_SLOTS, // 247..266  (per-entry delay)
+    ET_VIEW_SIZE = I_GARBAGE_DELAY + ET_GARBAGE_SLOTS,    // 267
 };
 
 static int computeGhostY(const eng::State& s)
@@ -56,6 +61,22 @@ static int computeGhostY(const eng::State& s)
     int gy = s.y;
     while (eng::ops::canPlacePiece(s.board, piece, s.x, gy + 1)) { gy++; }
     return gy;
+}
+
+static step::Action placementActionToStepAction(eng::PlacementAction pa)
+{
+    switch (pa) {
+        case eng::PlacementAction::LEFT: return step::Action::MOVE_LEFT;
+        case eng::PlacementAction::RIGHT: return step::Action::MOVE_RIGHT;
+        case eng::PlacementAction::LEFT_WALL: return step::Action::MOVE_LEFT_TO_WALL;
+        case eng::PlacementAction::RIGHT_WALL: return step::Action::MOVE_RIGHT_TO_WALL;
+        case eng::PlacementAction::SOFT_DROP: return step::Action::SOFT_DROP;
+        case eng::PlacementAction::SOFT_DROP_FLOOR: return step::Action::SOFT_DROP_TO_FLOOR;
+        case eng::PlacementAction::ROTATE_CW: return step::Action::ROTATE_CW;
+        case eng::PlacementAction::ROTATE_CCW: return step::Action::ROTATE_CCW;
+        case eng::PlacementAction::ROTATE_180: return step::Action::ROTATE_180;
+        default: return step::Action::NOOP;
+    }
 }
 
 extern "C" {
@@ -142,6 +163,65 @@ void et_serialize(step::Context* ctx, int* out)
     for (int i = 0; i < eng::GARBAGE_QUEUE_SIZE; ++i) { pending += s.garbage_queue[i]; }
     out[I_PENDING_GARBAGE] = pending;
     out[I_LIFETIME] = ctx->lifetime;
+    for (int i = 0; i < ET_GARBAGE_SLOTS; ++i) {
+        out[I_GARBAGE_QUEUE + i] = s.garbage_queue[i];
+        out[I_GARBAGE_DELAY + i] = s.garbage_delay[i];
+    }
+}
+
+// ---- Placement-level API (Phase 2: AI backend) ----
+
+// Number of int32 slots a full-state serialization occupies.
+EMSCRIPTEN_KEEPALIVE
+int et_codec_size() { return codec::STATE_CODEC_SIZE; }
+
+// Serialize the complete engine context (board + pieces + garbage + config)
+// for the AI backend. out must hold et_codec_size() int32 values.
+EMSCRIPTEN_KEEPALIVE
+void et_serialize_full(step::Context* ctx, int* out)
+{
+    codec::serialize(*ctx, out);
+}
+
+// Enumerate the legal placements for the current piece (no-hold branch only).
+// Writes up to max_count entries of 4 ints each: lock_x, lock_y, orientation,
+// spin_type (engine coordinates). Returns the number of placements written.
+EMSCRIPTEN_KEEPALIVE
+int et_find_placements(step::Context* ctx, int* out, int max_count)
+{
+    const auto placements = eng::findPlacements(ctx->state);
+    int n = 0;
+    for (const auto& p : placements) {
+        if (n >= max_count) { break; }
+        out[n * 4 + 0] = p.lock_x;
+        out[n * 4 + 1] = p.lock_y;
+        out[n * 4 + 2] = p.orientation;
+        out[n * 4 + 3] = static_cast<int>(p.spin_type);
+        ++n;
+    }
+    return n;
+}
+
+// Apply a placement-level move: optionally hold, then replay the BFS path to
+// the locked position and hard-drop. The (lock_x, lock_y) are engine board
+// coordinates, matching the console string emitted by minizero's genmove.
+// Returns 1 on success, 0 if no matching placement was found.
+EMSCRIPTEN_KEEPALIVE
+int et_apply_placement(step::Context* ctx, int use_hold, int lock_x, int lock_y, int orientation, int spin_type)
+{
+    if (use_hold) {
+        if (!step::step(ctx, step::Action::HOLD).action_success) { return 0; }
+    }
+    const auto placements = eng::findPlacements(ctx->state);
+    for (const auto& p : placements) {
+        if (p.lock_x == lock_x && p.lock_y == lock_y &&
+            p.orientation == orientation && static_cast<int>(p.spin_type) == spin_type) {
+            for (const auto pa : p.path) { step::step(ctx, placementActionToStepAction(pa)); }
+            step::step(ctx, step::Action::HARD_DROP);
+            return 1;
+        }
+    }
+    return 0;
 }
 
 } // extern "C"

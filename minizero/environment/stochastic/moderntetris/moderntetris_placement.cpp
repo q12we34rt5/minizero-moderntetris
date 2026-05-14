@@ -107,6 +107,23 @@ void ModernTetrisPlacementEnv::reset(int seed)
     turn_ = Player::kPlayer1;
 }
 
+void ModernTetrisPlacementEnv::setState(const engine::step::Context& ctx)
+{
+    ctx_ = ctx;
+    actions_.clear();
+    events_.clear();
+    observations_.clear();
+    reward_ = 0.0f;
+    total_reward_ = 0.0f;
+    placements_dirty_ = true;
+    {
+        using namespace minizero::env::moderntetris;
+        const auto cfg = reward::RewardConfig::fromGlobals();
+        reward_prev_potential_ = reward::computeBoardPotential(ctx_.state, cfg);
+    }
+    turn_ = Player::kPlayer1;
+}
+
 bool ModernTetrisPlacementEnv::act(const ModernTetrisPlacementAction& action, bool with_chance /* = true */)
 {
     if (turn_ != Player::kPlayer1 || action.getPlayer() != Player::kPlayer1) { return false; }

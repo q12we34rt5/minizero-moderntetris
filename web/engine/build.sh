@@ -51,6 +51,7 @@ em++ \
     -I "$ENGINE_SRC" \
     "$SCRIPT_DIR/engine_wasm.cpp" \
     "$ENGINE_SRC/tetris.cpp" \
+    "$ENGINE_SRC/placement_search.cpp" \
     -o "$OUT_DIR/engine-wasm.js" \
     -s MODULARIZE=1 \
     -s EXPORT_ES6=1 \
@@ -58,6 +59,6 @@ em++ \
     -s ENVIRONMENT=web,node \
     -s ALLOW_MEMORY_GROWTH=1 \
     -s EXPORTED_RUNTIME_METHODS=ccall,cwrap,HEAP32 \
-    -s 'EXPORTED_FUNCTIONS=_et_view_size,_et_create,_et_free,_et_set_config,_et_reset,_et_step,_et_add_garbage,_et_serialize,_malloc,_free'
+    -s 'EXPORTED_FUNCTIONS=_et_view_size,_et_create,_et_free,_et_set_config,_et_reset,_et_step,_et_add_garbage,_et_serialize,_et_serialize_full,_et_codec_size,_et_find_placements,_et_apply_placement,_malloc,_free'
 
 echo "built: $OUT_DIR/engine-wasm.js + engine-wasm.wasm"

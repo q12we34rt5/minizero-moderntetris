@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "build:engine": "bash engine/build.sh",
     "test:engine": "node engine/smoke-test.mjs",
+    "test:codec": "c++ -std=c++17 -I ../minizero/environment/stochastic/moderntetris/engine engine/codec-roundtrip-test.cpp -o /tmp/moderntetris-codec-test && /tmp/moderntetris-codec-test",
     "lint": "eslint .",
     "preview": "vite preview"
   },

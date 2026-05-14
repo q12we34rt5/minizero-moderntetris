@@ -5,6 +5,7 @@
 #include "sgf_loader.h"
 #include "time_system.h"
 #if MODERNTETRIS_PLACEMENT
+#include "engine/state_codec.hpp"
 #include "moderntetris_placement.h"
 #include "placement_transformer_network.h"
 #endif
@@ -34,6 +35,7 @@ Console::Console()
     RegisterFunction("boardsize", this, &Console::cmdBoardSize);
     RegisterFunction("genmove", this, &Console::cmdGenmove);
     RegisterFunction("reg_genmove", this, &Console::cmdGenmove);
+    RegisterFunction("set_state", this, &Console::cmdSetState);
     RegisterFunction("final_score", this, &Console::cmdFinalScore);
     RegisterFunction("pv", this, &Console::cmdPV);
     RegisterFunction("pv_string", this, &Console::cmdPVString);
@@ -183,6 +185,32 @@ void Console::cmdGenmove(const std::vector<std::string>& args)
     if (actor_->isResign()) { return reply(ConsoleResponse::kSuccess, "Resign"); }
 
     reply(ConsoleResponse::kSuccess, action.toConsoleString());
+}
+
+void Console::cmdSetState(const std::vector<std::string>& args)
+{
+#if MODERNTETRIS_PLACEMENT
+    namespace codec = minizero::env::moderntetris::engine::codec;
+    // args: "set_state" followed by exactly STATE_CODEC_SIZE signed int32 values
+    // (the flat serialization produced by codec::serialize / the WASM frontend).
+    if (!checkArgument(args, 1 + codec::STATE_CODEC_SIZE, 1 + codec::STATE_CODEC_SIZE)) { return; }
+    std::vector<std::int32_t> buf(codec::STATE_CODEC_SIZE);
+    try {
+        for (int i = 0; i < codec::STATE_CODEC_SIZE; ++i) {
+            buf[i] = static_cast<std::int32_t>(std::stoll(args[i + 1]));
+        }
+    } catch (const std::exception&) {
+        return reply(ConsoleResponse::kFail, "set_state: non-integer argument");
+    }
+    minizero::env::moderntetris::engine::step::Context ctx;
+    codec::deserialize(buf.data(), ctx);
+    actor_->getEnvironment().setState(ctx);
+    actor_->resetSearch();
+    reply(ConsoleResponse::kSuccess, "");
+#else
+    (void)args;
+    reply(ConsoleResponse::kFail, "set_state is only supported in moderntetris_placement builds");
+#endif
 }
 
 void Console::cmdFinalScore(const std::vector<std::string>& args)
