@@ -1,0 +1,99 @@
+// Node smoke test for the WASM engine wrapper. Verifies the serialization
+// layout and basic step semantics independently of the browser UI.
+//
+//   node engine/smoke-test.mjs        (run from web/)
+import createEngineModule from '../src/engine/engine-wasm.js';
+
+const VIEW_SIZE = 227;
+const BOARD_W = 10;
+const BOARD_H = 20;
+
+const I = {
+  CURRENT: 200, ORIENTATION: 201, X: 202, Y: 203, GHOST_Y: 204,
+  HOLD: 205, HAS_HELD: 206, NEXT: 207, IS_ALIVE: 212, PIECE_COUNT: 213,
+  TOTAL_LINES: 219,
+};
+
+let failures = 0;
+function check(name, cond) {
+  if (cond) {
+    console.log(`  ok   ${name}`);
+  } else {
+    console.log(`  FAIL ${name}`);
+    failures++;
+  }
+}
+
+const mod = await createEngineModule();
+check('et_view_size matches VIEW_SIZE', mod._et_view_size() === VIEW_SIZE);
+
+const ctx = mod._et_create();
+const ptr = mod._malloc(VIEW_SIZE * 4);
+const read = () => {
+  mod._et_serialize(ctx, ptr);
+  const base = ptr >> 2;
+  return mod.HEAP32.subarray(base, base + VIEW_SIZE).slice();
+};
+
+mod._et_set_config(ctx, 0, 0);
+mod._et_reset(ctx, 12345);
+let v = read();
+
+check('board has 20x10 cells, all empty after reset',
+  Array.from(v.slice(0, BOARD_W * BOARD_H)).every((c) => c === 0));
+check('current piece is valid 0..6', v[I.CURRENT] >= 0 && v[I.CURRENT] <= 6);
+check('next queue piece types valid',
+  Array.from(v.slice(I.NEXT, I.NEXT + 5)).every((p) => p >= 0 && p <= 6));
+check('alive after reset', v[I.IS_ALIVE] === 1);
+check('piece_count 0 after reset', v[I.PIECE_COUNT] === 0);
+check('spawn x within board', v[I.X] >= 0 && v[I.X] < BOARD_W);
+
+// determinism: same seed -> same first piece + queue
+mod._et_reset(ctx, 12345);
+const v2 = read();
+check('reset is deterministic for a fixed seed',
+  v2[I.CURRENT] === v[I.CURRENT] &&
+  Array.from(v2.slice(I.NEXT, I.NEXT + 5)).join(',') ===
+    Array.from(v.slice(I.NEXT, I.NEXT + 5)).join(','));
+
+// move left to wall then hard drop -> a piece should lock, piece_count++
+const before = read();
+mod._et_step(ctx, 8); // MOVE_LEFT_TO_WALL
+const moved = read();
+check('move-left-to-wall pins piece to x=0', moved[I.X] === 0);
+mod._et_step(ctx, 3); // HARD_DROP
+const dropped = read();
+check('hard drop increments piece_count', dropped[I.PIECE_COUNT] === before[I.PIECE_COUNT] + 1);
+check('hard drop leaves cells on the board',
+  Array.from(dropped.slice(0, BOARD_W * BOARD_H)).some((c) => c !== 0));
+
+// hold swaps the current piece
+mod._et_reset(ctx, 999);
+const pre = read();
+mod._et_step(ctx, 7); // HOLD
+const held = read();
+check('hold sets has_held', held[I.HAS_HELD] === 1);
+check('hold stores the original current piece', held[I.HOLD] === pre[I.CURRENT]);
+
+// fill and clear a line: drop pieces across the floor is complex; instead just
+// sanity-check that ghost_y >= y (landing is at or below the active piece).
+mod._et_reset(ctx, 7);
+v = read();
+check('ghost_y is at or below active y', v[I.GHOST_Y] >= v[I.Y]);
+
+// rotation changes orientation (T piece rotates freely on an empty board)
+mod._et_reset(ctx, 7);
+const r0 = read();
+mod._et_step(ctx, 4); // ROTATE_CW
+const r1 = read();
+check('rotate cw changes orientation', r1[I.ORIENTATION] === (r0[I.ORIENTATION] + 1) % 4);
+
+// add garbage queues lines (pending_garbage reflects it; applied on next lock)
+mod._et_reset(ctx, 7);
+check('add_garbage returns success', mod._et_add_garbage(ctx, 4, 0) === 1);
+
+mod._free(ptr);
+mod._et_free(ctx);
+
+console.log(failures === 0 ? '\nALL PASSED' : `\n${failures} FAILED`);
+process.exit(failures === 0 ? 0 : 1);

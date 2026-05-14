@@ -1,0 +1,347 @@
+/* Dark UI, ported from TetRL-Arena/web/static/index.html. */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap');
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --bg-dark: #0a0a12;
+  --bg-panel: rgba(18, 18, 30, 0.85);
+  --border: rgba(100, 120, 200, 0.15);
+  --border-glow: rgba(100, 140, 255, 0.3);
+  --text: #e0e4f0;
+  --text-dim: #7a7f95;
+  --text-bright: #ffffff;
+  --accent: #6c8aff;
+  --accent-glow: rgba(108, 138, 255, 0.4);
+  --danger: #ff4d6a;
+  --success: #3dffa0;
+  --radius: 10px;
+  --radius-sm: 6px;
+}
+
+body {
+  font-family: 'Inter', sans-serif;
+  background: var(--bg-dark);
+  color: var(--text);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  overflow-x: hidden;
+  background-image:
+    radial-gradient(ellipse at 20% 50%, rgba(108, 138, 255, 0.04) 0%, transparent 60%),
+    radial-gradient(ellipse at 80% 20%, rgba(168, 85, 247, 0.03) 0%, transparent 60%);
+}
+
+header {
+  width: 100%;
+  padding: 16px 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+  backdrop-filter: blur(12px);
+  background: rgba(10, 10, 18, 0.7);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+header h1 {
+  font-size: 1.2rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  background: linear-gradient(135deg, var(--accent), #a78bfa);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.status-chip {
+  font-size: 0.75rem;
+  font-weight: 500;
+  padding: 4px 12px;
+  border-radius: 20px;
+  background: rgba(255, 196, 77, 0.15);
+  color: #ffc44d;
+}
+
+.status-chip.playing {
+  background: rgba(61, 255, 160, 0.15);
+  color: var(--success);
+}
+
+.status-chip.gameover {
+  background: rgba(255, 77, 106, 0.15);
+  color: var(--danger);
+}
+
+main {
+  display: flex;
+  gap: 20px;
+  padding: 24px;
+  max-width: 1200px;
+  width: 100%;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  backdrop-filter: blur(8px);
+}
+
+.panel-title {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 12px;
+}
+
+.col-left {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 120px;
+}
+
+.col-right {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 240px;
+}
+
+.center-column {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.hold-box,
+.next-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.next-queue {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+}
+
+.board-wrapper {
+  position: relative;
+}
+
+.board-wrapper canvas {
+  display: block;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-glow);
+  box-shadow:
+    0 0 40px rgba(108, 138, 255, 0.08),
+    inset 0 0 30px rgba(0, 0, 0, 0.3);
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.stat-item {
+  display: flex;
+  flex-direction: column;
+  padding: 8px;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.stat-label {
+  font-size: 0.6rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+
+.stat-value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-bright);
+  margin-top: 2px;
+}
+
+.stat-value.accent {
+  color: var(--accent);
+}
+
+.bottom-bar {
+  display: flex;
+  gap: 16px;
+  padding: 0 24px 24px;
+  max-width: 1200px;
+  width: 100%;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.setting-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.setting-item label {
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+
+input[type='number'],
+input[type='text'] {
+  width: 100%;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-bright);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+input[type='number']:focus,
+input[type='text']:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.btn {
+  padding: 8px 20px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+  font-family: 'Inter', sans-serif;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: var(--accent);
+}
+
+.btn-primary {
+  background: rgba(108, 138, 255, 0.15);
+  border-color: rgba(108, 138, 255, 0.3);
+  color: var(--accent);
+}
+
+.btn-primary:hover {
+  background: rgba(108, 138, 255, 0.25);
+}
+
+.controls-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.controls-row label {
+  font-size: 0.65rem;
+  color: var(--text-dim);
+  font-weight: 600;
+}
+
+.seed-input {
+  width: 120px;
+}
+
+.keybinds {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 12px;
+  font-size: 0.65rem;
+}
+
+.keybinds kbd {
+  font-family: 'JetBrains Mono', monospace;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 2px 6px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 0.6rem;
+  color: var(--text-bright);
+  text-align: center;
+}
+
+.keybinds span {
+  color: var(--text-dim);
+}
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(10, 10, 18, 0.85);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius);
+  z-index: 10;
+}
+
+.overlay h2 {
+  font-size: 1.8rem;
+  font-weight: 800;
+  color: var(--danger);
+  margin-bottom: 8px;
+}
+
+.overlay.loading h2 {
+  color: var(--accent);
+}
+
+.overlay p {
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  margin-bottom: 16px;
+}
+
+::-webkit-scrollbar {
+  width: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+}
