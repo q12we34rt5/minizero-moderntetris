@@ -63,6 +63,7 @@ float learner_weight_decay = 0.0001;
 float learner_value_loss_scale = 1.0f;
 int learner_num_thread = 8;
 int learner_placement_cache_interval = 1;
+float learner_placement_mirror_aug_prob = 0.5f;
 
 // network parameters
 std::string nn_file_name = "";
@@ -184,6 +185,7 @@ void setConfiguration(ConfigureLoader& cl)
     cl.addParameter("learner_value_loss_scale", learner_value_loss_scale, "hyperparameter for scaling of the value loss", "Learner");
     cl.addParameter("learner_num_thread", learner_num_thread, "the number of threads for training", "Learner");
     cl.addParameter("learner_placement_cache_interval", learner_placement_cache_interval, "moderntetris_placement: store a replay snapshot every K positions (1 = every step; higher = less memory, more per-sample replay)", "Learner");
+    cl.addParameter("learner_placement_mirror_aug_prob", learner_placement_mirror_aug_prob, "moderntetris_placement: probability of horizontal mirror augmentation per training sample (0 disables)", "Learner");
 
     // network parameters
     cl.addParameter("nn_file_name", nn_file_name, "the file name of model weights", "Network");

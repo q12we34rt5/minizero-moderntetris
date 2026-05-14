@@ -139,6 +139,11 @@ public:
     std::vector<PlacementActionDescriptor> getActionDescriptors() const; // aligned with getLegalActions() order
     int getBoardChannels() const { return kPlacementBoardChannels; }
 
+    // Raw engine state. The data loader's verify-then-mirror augmentation uses
+    // it to run the engine's BFS on the mirrored board as ground truth; the
+    // placement_mirror_verify console mode uses it the same way.
+    const engine::State& getEngineState() const { return ctx_.state; }
+
     // Free the cached BFS placement results. Each cached entry carries a full
     // PlacementSearchResult (including the BFS path and final State), so the
     // cache can grow to tens of KB; clearing it before snapshotting an env in

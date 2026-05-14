@@ -11,6 +11,9 @@
 #include <utility>
 #if MODERNTETRIS_PLACEMENT
 #include "moderntetris_placement.h"
+#include "placement_mirror.h"
+#include <set>
+#include <tuple>
 #endif
 
 namespace minizero::learner {
@@ -458,6 +461,96 @@ void DataLoaderThread::setPlacementTrainingData(int batch_index)
     }
     // match_count > 0 here, so pi_sum > 0.
     for (int i = 0; i < N; ++i) { dp->policy_[action_base + i] /= pi_sum; }
+
+    // Train-time horizontal-mirror augmentation, verify-then-mirror. Runs AFTER
+    // the strict env-vs-SGF cross-check so the env state stays untouched and the
+    // throw above still guards replay determinism.
+    //
+    // The placement env is NOT left-right symmetric: PIECE_SPAWN_X sits off the
+    // playfield axis, so the engine's BFS reachability differs between a board
+    // and its mirror. Some analytically-mirrored placements are not BFS-reachable
+    // on the flipped board ("phantoms"); training on one teaches the model to
+    // want an action the env will never offer at inference. So we mirror only
+    // when every mirrored descriptor is confirmed legal by the engine's own BFS
+    // on the mirrored state -- otherwise the sample is left un-mirrored.
+    // (~1.75% of states fall back; see the placement_mirror_verify console mode.)
+    //
+    // When applied: per-row pi_target stays put because each row still represents
+    // the same placement -- only its spatial fields and the surrounding
+    // piece-type globals are flipped to their chiral images. srs_index /
+    // was_rotation globals are NOT mirrored (a proper mirror would swap CW<->CCW
+    // kick indices via the chiral piece's srs_table, which the engine doesn't
+    // expose); the model sees a small inconsistency on those two scalars only.
+    const float mirror_prob = config::learner_placement_mirror_aug_prob;
+    if (mirror_prob > 0.0f && utils::Random::randReal() < mirror_prob) {
+        namespace mr = minizero::env::moderntetris_placement::mirror;
+        namespace eng = minizero::env::moderntetris::engine;
+
+        // Engine ground truth: legal placements on the mirrored board, both the
+        // no-hold and hold branches, replicating rebuildLegalPlacements().
+        const eng::State mstate = mr::mirrorState(env.getEngineState());
+        std::set<std::tuple<int, int, int, int, int>> b_spatial; // use_hold,lock_x,lock_y,orient,piece
+        auto addB = [&](const eng::PlacementSearchResult& pl, bool use_hold, int piece) {
+            b_spatial.emplace(use_hold ? 1 : 0,
+                              static_cast<int>(pl.lock_x) - eng::BOARD_LEFT,
+                              static_cast<int>(pl.lock_y) - eng::BOARD_TOP,
+                              static_cast<int>(pl.orientation), piece);
+        };
+        for (const auto& pl : eng::findPlacements(mstate)) { addB(pl, false, static_cast<int>(mstate.current)); }
+        if (!mstate.has_held) {
+            eng::State hold_state = mstate;
+            eng::hold(&hold_state);
+            if (hold_state.current != mstate.current || mstate.hold != eng::PieceType::NONE) {
+                const int hp = (mstate.hold != eng::PieceType::NONE)
+                                   ? static_cast<int>(mstate.hold)
+                                   : static_cast<int>(mstate.next[0]);
+                for (const auto& pl : eng::findPlacements(hold_state)) { addB(pl, true, hp); }
+            }
+        }
+
+        // verify-then-mirror: apply only if no mirrored descriptor is a phantom
+        // (i.e. every mirrored descriptor is in the engine's mirrored legal set).
+        bool mirror_safe = true;
+        for (int i = 0; i < N && mirror_safe; ++i) {
+            const auto& d = descs[i];
+            const auto m = mr::mirrorPlacement(d.piece_type, d.orientation, d.lock_x);
+            if (b_spatial.find(std::make_tuple(d.use_hold ? 1 : 0, m.lock_x, d.lock_y,
+                                               m.orientation, m.piece_type)) == b_spatial.end()) {
+                mirror_safe = false;
+            }
+        }
+
+        if (mirror_safe) {
+            constexpr int H = kModernTetrisPlacementBoardHeight;
+            constexpr int W = kModernTetrisPlacementBoardWidth;
+            float* board_buf = dp->features_ + board.size() * batch_index;
+            for (int r = 0; r < H; ++r) {
+                for (int c = 0; c < W / 2; ++c) {
+                    std::swap(board_buf[r * W + c], board_buf[r * W + (W - 1 - c)]);
+                }
+            }
+
+            // normalizePiece maps NONE/-1 -> 7 (a sentinel), so the chiral
+            // lookup must short-circuit on out-of-range values.
+            auto chiralPiece = [](int64_t p) -> int64_t {
+                return (p < 0 || p >= 7) ? p : static_cast<int64_t>(mr::kPieceChiral[p]);
+            };
+            dp->placement_current_piece_[batch_index] = chiralPiece(dp->placement_current_piece_[batch_index]);
+            dp->placement_hold_piece_[batch_index] = chiralPiece(dp->placement_hold_piece_[batch_index]);
+            for (int j = 0; j < preview_size; ++j) {
+                int64_t& pv = dp->placement_preview_[batch_index * preview_size + j];
+                pv = chiralPiece(pv);
+            }
+
+            for (int i = 0; i < N; ++i) {
+                const auto& d = descs[i];
+                const auto m = mr::mirrorPlacement(d.piece_type, d.orientation, d.lock_x);
+                dp->placement_action_piece_type_[action_base + i] = m.piece_type;
+                dp->placement_action_orientation_[action_base + i] = m.orientation;
+                dp->placement_action_lock_x_[action_base + i] = m.lock_x;
+            }
+        }
+    }
 
     // Value.
     std::copy(value.begin(), value.end(), dp->value_ + value.size() * batch_index);
