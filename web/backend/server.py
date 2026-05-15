@@ -45,12 +45,25 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 class MinizeroConsole:
     """Owns the minizero console subprocess. One inference at a time."""
 
-    def __init__(self, bin_path: Path, cfg: Path, model: Path):
+    def __init__(self, bin_path: Path, cfg: Path, model: Path, conf_str: str = ""):
+        # minizero's -conf_str is a ':'-separated list of key=value pairs;
+        # later pairs override earlier ones. The model path and the
+        # web-play garbage setting come first; the caller's --conf_str is
+        # appended last so it can override anything (it is an explicit
+        # power-user knob). env_modern_tetris_garbage_probability=0 is
+        # intentional for web play -- garbage should only come from the
+        # opponent board, not random injection.
+        conf_parts = [
+            f"nn_file_name={model}",
+            "env_modern_tetris_garbage_probability=0",
+        ]
+        if conf_str:
+            conf_parts.append(conf_str)
         self._cmd = [
             str(bin_path),
             "-mode", "console",
             "-conf_file", str(cfg),
-            "-conf_str", f"nn_file_name={model}:env_modern_tetris_garbage_probability=0",
+            "-conf_str", ":".join(conf_parts),
         ]
         self._proc: asyncio.subprocess.Process | None = None
         self._lock = asyncio.Lock()
@@ -145,6 +158,12 @@ async def main() -> None:
     )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8001)
+    parser.add_argument(
+        "--conf_str",
+        default="",
+        help="extra minizero -conf_str overrides (':'-separated key=value pairs), "
+        "appended last so they override the defaults",
+    )
     args = parser.parse_args()
 
     cfg = Path(args.cfg).resolve()
@@ -154,7 +173,7 @@ async def main() -> None:
         if not p.exists():
             sys.exit(f"error: --{label} not found: {p}")
 
-    console = MinizeroConsole(bin_path, cfg, model)
+    console = MinizeroConsole(bin_path, cfg, model, args.conf_str)
     await console.start()
 
     async with websockets.serve(lambda ws: handle(ws, console), args.host, args.port):
