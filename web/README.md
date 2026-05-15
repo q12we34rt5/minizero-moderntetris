@@ -85,7 +85,8 @@ backend/
 src/
   engine/    WASM glue, serialized-view layout (view.ts), Engine class
   data/      tetromino shapes / colors
-  input/     keyboard DAS/ARR controller (ported from TetRL-Arena)
+  input/     source-agnostic input controller (keyboard + gamepad) with
+             DAS/ARR timing; gamepad reader / remappable button mapping
   render/    canvas rendering
   game/      useGame hook — engines + input + loop + AI wiring
   ai/        WebSocket client for the AI backend

@@ -2,6 +2,7 @@ import { useGame, type GameMode } from './game/useGame.ts';
 import { BoardPanel, type BoardOverlay } from './components/BoardPanel.tsx';
 import { SettingsPanel } from './components/SettingsPanel.tsx';
 import { PveSettingsPanel } from './components/PveSettingsPanel.tsx';
+import { GamepadPanel } from './components/GamepadPanel.tsx';
 
 const KEYBINDS: [string, string][] = [
   ['←', 'Move Left'],
@@ -112,6 +113,13 @@ export default function App() {
 
       <div className="bottom-bar">
         {mode !== 'eve' && <SettingsPanel settings={game.settings} onChange={game.setSettings} />}
+        {mode !== 'eve' && (
+          <GamepadPanel
+            status={game.gamepadStatus}
+            mapping={game.gamepadMapping}
+            onChange={game.setGamepadMapping}
+          />
+        )}
         {showAiPanel && (
           <PveSettingsPanel
             mode={mode}

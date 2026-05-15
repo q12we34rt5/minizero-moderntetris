@@ -1,4 +1,4 @@
-import type { InputSettings } from '../input/keyboard.ts';
+import type { InputSettings } from '../input/controller.ts';
 
 interface Props {
   settings: InputSettings;

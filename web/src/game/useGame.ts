@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Engine } from '../engine/engine.ts';
 import type { GameView } from '../engine/view.ts';
-import { InputController, DEFAULT_SETTINGS, Action, type InputSettings } from '../input/keyboard.ts';
+import { InputController, DEFAULT_SETTINGS, Action, type InputSettings } from '../input/controller.ts';
+import { DEFAULT_GAMEPAD_MAPPING, type GamepadMapping, type GamepadStatus } from '../input/gamepad.ts';
 import { AiClient, type AiConnectionStatus } from '../ai/client.ts';
 
 export type GameMode = 'single' | 'pve' | 'eve';
@@ -34,6 +35,7 @@ const DEFAULT_PVE: PveSettings = {
 
 const SETTINGS_KEY = 'moderntetris-web-settings';
 const PVE_KEY = 'moderntetris-web-pve';
+const GAMEPAD_KEY = 'moderntetris-web-gamepad';
 
 function load<T>(key: string, fallback: T): T {
   try {
@@ -116,6 +118,9 @@ export interface UseGame {
   setSettings: (s: InputSettings) => void;
   pveSettings: PveSettings;
   setPveSettings: (s: PveSettings) => void;
+  gamepadMapping: GamepadMapping;
+  setGamepadMapping: (m: GamepadMapping) => void;
+  gamepadStatus: GamepadStatus;
   seed: string;
   setSeed: (s: string) => void;
   reset: () => void;
@@ -133,10 +138,13 @@ export function useGame(): UseGame {
   const [aiStatusB, setAiStatusB] = useState<AiConnectionStatus>('disconnected');
   const [settings, setSettingsState] = useState<InputSettings>(() => load(SETTINGS_KEY, DEFAULT_SETTINGS));
   const [pveSettings, setPveSettingsState] = useState<PveSettings>(() => load(PVE_KEY, DEFAULT_PVE));
+  const [gamepadMapping, setGamepadMappingState] = useState<GamepadMapping>(() => load(GAMEPAD_KEY, DEFAULT_GAMEPAD_MAPPING));
+  const [gamepadStatus, setGamepadStatus] = useState<GamepadStatus>({ connected: false, id: null });
   const [seed, setSeedState] = useState('');
 
   const settingsRef = useRef(settings);
   const pveSettingsRef = useRef(pveSettings);
+  const gamepadMappingRef = useRef(gamepadMapping);
   const modeRef = useRef(mode);
   const seedRef = useRef(seed);
   const statusRef = useRef<GameStatus>(status);
@@ -156,6 +164,12 @@ export function useGame(): UseGame {
     pveSettingsRef.current = s;
     setPveSettingsState(s);
     save(PVE_KEY, s);
+  }, []);
+
+  const setGamepadMapping = useCallback((m: GamepadMapping) => {
+    gamepadMappingRef.current = m;
+    setGamepadMappingState(m);
+    save(GAMEPAD_KEY, m);
   }, []);
 
   const setSeed = useCallback((s: string) => {
@@ -376,7 +390,9 @@ export function useGame(): UseGame {
 
       input = new InputController({
         getSettings: () => settingsRef.current,
+        getGamepadMapping: () => gamepadMappingRef.current,
         onReset: () => doReset(),
+        onGamepadStatus: (s) => setGamepadStatus(s),
       });
       input.attach();
 
@@ -432,6 +448,9 @@ export function useGame(): UseGame {
     setSettings,
     pveSettings,
     setPveSettings,
+    gamepadMapping,
+    setGamepadMapping,
+    gamepadStatus,
     seed,
     setSeed,
     reset,

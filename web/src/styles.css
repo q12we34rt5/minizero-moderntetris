@@ -419,6 +419,83 @@ input[type='text']:focus {
   line-height: 1.5;
 }
 
+/* ===== Gamepad panel ===== */
+.gamepad-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  margin-bottom: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.status-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.status-dot.on {
+  background: var(--success);
+  box-shadow: 0 0 6px var(--success);
+}
+.status-dot.off {
+  background: var(--text-dim);
+}
+
+.gamepad-rows {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 14px;
+}
+
+.gamepad-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.gamepad-input-label {
+  font-size: 0.68rem;
+  color: var(--text-dim);
+}
+
+.gamepad-bind {
+  flex: none;
+  min-width: 104px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-bright);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.62rem;
+  cursor: pointer;
+  text-align: center;
+  transition: all 0.15s;
+}
+.gamepad-bind:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.gamepad-bind:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.gamepad-bind.capturing {
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.gamepad-reset {
+  margin-top: 10px;
+}
+
 ::-webkit-scrollbar {
   width: 4px;
 }
