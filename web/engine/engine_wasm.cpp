@@ -202,6 +202,37 @@ int et_find_placements(step::Context* ctx, int* out, int max_count)
     return n;
 }
 
+// Resolve a placement to its step-action sequence WITHOUT mutating ctx:
+// [HOLD?] + BFS path moves + HARD_DROP, as step::Action ids. The caller can
+// replay it through et_step one action at a time to animate the move.
+// Writes up to max_count ids into out; returns the count, or 0 if no matching
+// placement was found.
+EMSCRIPTEN_KEEPALIVE
+int et_placement_path(step::Context* ctx, int use_hold, int lock_x, int lock_y,
+                      int orientation, int spin_type, int* out, int max_count)
+{
+    eng::State search_state = ctx->state;
+    int n = 0;
+    auto emit = [&](step::Action a) {
+        if (n < max_count) { out[n] = static_cast<int>(a); }
+        ++n;
+    };
+    if (use_hold) {
+        eng::hold(&search_state); // matches the placement env's hold branch
+        emit(step::Action::HOLD);
+    }
+    const auto placements = eng::findPlacements(search_state);
+    for (const auto& p : placements) {
+        if (p.lock_x == lock_x && p.lock_y == lock_y &&
+            p.orientation == orientation && static_cast<int>(p.spin_type) == spin_type) {
+            for (const auto pa : p.path) { emit(placementActionToStepAction(pa)); }
+            emit(step::Action::HARD_DROP);
+            return n;
+        }
+    }
+    return 0; // no match
+}
+
 // Apply a placement-level move: optionally hold, then replay the BFS path to
 // the locked position and hard-drop. The (lock_x, lock_y) are engine board
 // coordinates, matching the console string emitted by minizero's genmove.

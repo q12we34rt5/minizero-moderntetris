@@ -11,6 +11,16 @@ export interface EngineWasmModule {
   _et_codec_size(): number;
   _et_serialize_full(ctx: number, outPtr: number): void;
   _et_find_placements(ctx: number, outPtr: number, maxCount: number): number;
+  _et_placement_path(
+    ctx: number,
+    useHold: number,
+    lockX: number,
+    lockY: number,
+    orientation: number,
+    spinType: number,
+    outPtr: number,
+    maxCount: number,
+  ): number;
   _et_apply_placement(
     ctx: number,
     useHold: number,

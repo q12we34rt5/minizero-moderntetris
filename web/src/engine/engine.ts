@@ -16,6 +16,7 @@ export interface Placement {
 }
 
 const MAX_PLACEMENTS = 512;
+const MAX_PATH = 256;
 
 /**
  * Thin wrapper around the WASM moderntetris engine. Owns one engine context
@@ -27,6 +28,7 @@ export class Engine {
   private readonly viewPtr: number;
   private readonly fullPtr: number;
   private readonly placementsPtr: number;
+  private readonly pathPtr: number;
   readonly codecSize: number;
 
   private constructor(mod: EngineWasmModule, ctx: number) {
@@ -36,6 +38,7 @@ export class Engine {
     this.viewPtr = mod._malloc(VIEW_SIZE * 4);
     this.fullPtr = mod._malloc(this.codecSize * 4);
     this.placementsPtr = mod._malloc(MAX_PLACEMENTS * 4 * 4);
+    this.pathPtr = mod._malloc(MAX_PATH * 4);
   }
 
   static async create(): Promise<Engine> {
@@ -93,6 +96,26 @@ export class Engine {
     return out;
   }
 
+  /**
+   * Resolve a placement to its step-action sequence ([HOLD?] + path + HARD_DROP)
+   * without mutating the engine. Replay it through step() to animate the move.
+   * Returns an empty array if no matching placement exists.
+   */
+  placementPath(p: Placement): number[] {
+    const n = this.mod._et_placement_path(
+      this.ctx,
+      p.useHold ? 1 : 0,
+      p.lockX,
+      p.lockY,
+      p.orientation,
+      p.spinType,
+      this.pathPtr,
+      MAX_PATH,
+    );
+    const base = this.pathPtr >> 2;
+    return Array.from(this.mod.HEAP32.subarray(base, base + n));
+  }
+
   /** Apply a placement-level move. Returns false if no matching placement exists. */
   applyPlacement(p: Placement): boolean {
     return (
@@ -108,6 +131,7 @@ export class Engine {
   }
 
   dispose(): void {
+    this.mod._free(this.pathPtr);
     this.mod._free(this.placementsPtr);
     this.mod._free(this.fullPtr);
     this.mod._free(this.viewPtr);

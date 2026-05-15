@@ -142,6 +142,31 @@ mod._et_reset(ctx, 42);
 check('apply_placement rejects an unreachable placement',
   mod._et_apply_placement(ctx, 0, 99, 99, 0, 0) === 0);
 
+// placement_path returns a step-action sequence that, replayed, matches
+// apply_placement (same final board + piece_count).
+const MAX_PATH = 256;
+const pathPtr = mod._malloc(MAX_PATH * 4);
+mod._et_reset(ctx, 55);
+mod._et_find_placements(ctx, placePtr, MAX_P);
+const pb = placePtr >> 2;
+const tgt = mod.HEAP32.subarray(pb, pb + 4).slice(); // first placement
+const pathLen = mod._et_placement_path(ctx, 0, tgt[0], tgt[1], tgt[2], tgt[3], pathPtr, MAX_PATH);
+check('placement_path returns a non-empty path ending in HARD_DROP', pathLen > 0);
+const ppb = pathPtr >> 2;
+const path = Array.from(mod.HEAP32.subarray(ppb, ppb + pathLen));
+check('placement_path last action is HARD_DROP (id 3)', path[path.length - 1] === 3);
+for (const a of path) mod._et_step(ctx, a); // replay on the (still seed-55) ctx
+const pathReplayed = read();
+mod._et_reset(ctx, 55);
+mod._et_apply_placement(ctx, 0, tgt[0], tgt[1], tgt[2], tgt[3]);
+const pathApplied = read();
+check('replayed placement_path matches apply_placement (board)',
+  Array.from(pathReplayed.slice(0, BOARD_W * BOARD_H)).join(',') ===
+    Array.from(pathApplied.slice(0, BOARD_W * BOARD_H)).join(','));
+check('replayed placement_path matches apply_placement (piece_count)',
+  pathReplayed[I.PIECE_COUNT] === pathApplied[I.PIECE_COUNT]);
+mod._free(pathPtr);
+
 mod._free(placePtr);
 mod._free(fullPtr);
 mod._free(ptr);

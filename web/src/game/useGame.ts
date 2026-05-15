@@ -83,6 +83,14 @@ function makeHud(view: GameView, clock: BoardClock): GameHud {
   return { view, pps, apm };
 }
 
+/** An in-progress AI move being played out step-by-step for animation. */
+interface AiAnim {
+  actions: number[]; // step-action ids: [HOLD?] + path moves + HARD_DROP
+  index: number; // next action to apply
+  lastStepTime: number;
+  stepInterval: number;
+}
+
 /** Runtime state for one board (A = left, B = right). */
 interface BoardRuntime {
   id: 'A' | 'B';
@@ -92,6 +100,7 @@ interface BoardRuntime {
   clock: BoardClock;
   pending: boolean; // an AI request is in flight
   lastRequest: number;
+  anim: AiAnim | null; // an AI move currently being animated
 }
 
 export interface UseGame {
@@ -195,17 +204,19 @@ export function useGame(): UseGame {
         eb.dispose();
         return;
       }
-      boardA = { id: 'A', engine: ea, client: clientA, control: 'human', clock: newClock(), pending: false, lastRequest: 0 };
-      boardB = { id: 'B', engine: eb, client: clientB, control: 'none', clock: newClock(), pending: false, lastRequest: 0 };
+      boardA = { id: 'A', engine: ea, client: clientA, control: 'human', clock: newClock(), pending: false, lastRequest: 0, anim: null };
+      boardB = { id: 'B', engine: eb, client: clientB, control: 'none', clock: newClock(), pending: false, lastRequest: 0, anim: null };
 
       const garbageDelay = () => pveSettingsRef.current.garbageDelay;
       const sendGarbage = (lines: number, opponent: BoardRuntime) => {
         if (lines > 0 && opponent.control !== 'none') opponent.engine.addGarbage(lines, garbageDelay());
       };
 
-      // One AI placement request -> apply -> exchange garbage -> death check.
+      // Request one AI placement, then play it out as an animation (see
+      // advanceAnim) rather than snapping to the final position.
       const aiTick = (board: BoardRuntime, opponent: BoardRuntime, now: number) => {
-        if (board.control !== 'ai' || board.client.status !== 'connected' || board.pending) return;
+        if (board.control !== 'ai' || board.client.status !== 'connected') return;
+        if (board.pending || board.anim) return;
         if (now - board.lastRequest < pveSettingsRef.current.aiIntervalMs) return;
         board.pending = true;
         board.lastRequest = now;
@@ -217,22 +228,59 @@ export function useGame(): UseGame {
             board.pending = false;
             if (cancelled || requestGen !== gen || statusRef.current !== 'playing') return;
             const loser: Winner = opponent.control === 'none' ? null : opponent.id;
-            if (placement === null || !board.engine.applyPlacement(placement)) {
-              endGame(loser); // resigned / topped out / illegal move
+            if (placement === null) {
+              endGame(loser); // AI resigned / topped out
               return;
             }
-            const av = board.engine.read();
-            if (!board.clock.firstPiece) {
-              board.clock.firstPiece = true;
-              board.clock.startTime = performance.now();
+            const path = board.engine.placementPath(placement);
+            if (path.length === 0) {
+              endGame(loser); // no matching placement (should not happen)
+              return;
             }
-            board.clock.pieceCount = av.pieceCount;
-            sendGarbage(av.linesSent, opponent);
-            if (!av.isAlive) endGame(loser);
+            // Spread the animation over ~60% of the AI interval, capped at
+            // 60ms/step. No lower bound: at AI Interval 0 this is 0ms/step, so
+            // the whole path applies in one frame (effectively a snap).
+            const interval = pveSettingsRef.current.aiIntervalMs;
+            board.anim = {
+              actions: path,
+              index: 0,
+              lastStepTime: performance.now(),
+              stepInterval: Math.min(60, Math.floor((interval * 0.6) / path.length)),
+            };
           })
           .catch(() => {
             board.pending = false; // backend/connection error -> status chip shows it
           });
+      };
+
+      // Play out an AI move one step-action per stepInterval. The final action
+      // (HARD_DROP) gets a longer beat so the lock reads clearly. When it lands,
+      // exchange garbage and check for a top-out.
+      const HARD_DROP_FACTOR = 2.5;
+      const advanceAnim = (board: BoardRuntime, opponent: BoardRuntime, now: number) => {
+        while (board.anim) {
+          const anim = board.anim;
+          const isHardDrop = anim.index === anim.actions.length - 1;
+          const required = isHardDrop
+            ? Math.round(anim.stepInterval * HARD_DROP_FACTOR)
+            : anim.stepInterval;
+          if (now - anim.lastStepTime < required) break;
+          board.engine.step(anim.actions[anim.index]);
+          anim.index += 1;
+          anim.lastStepTime += required;
+          if (anim.index >= anim.actions.length) {
+            board.anim = null;
+            const av = board.engine.read();
+            if (!board.clock.firstPiece) {
+              board.clock.firstPiece = true;
+              board.clock.startTime = now;
+            }
+            board.clock.pieceCount = av.pieceCount;
+            const loser: Winner = opponent.control === 'none' ? null : opponent.id;
+            sendGarbage(av.linesSent, opponent);
+            if (!av.isAlive) endGame(loser);
+          }
+        }
       };
 
       // Keyboard-driven board: collect actions, step, exchange garbage on lock.
@@ -285,6 +333,7 @@ export function useGame(): UseGame {
         boardA.clock = newClock();
         boardA.pending = false;
         boardA.lastRequest = 0;
+        boardA.anim = null;
 
         if (cB !== 'none') {
           boardB.engine.setConfig(0, false);
@@ -292,6 +341,7 @@ export function useGame(): UseGame {
           boardB.clock = newClock();
           boardB.pending = false;
           boardB.lastRequest = 0;
+          boardB.anim = null;
         }
 
         syncClient(boardA, pveSettingsRef.current.backendUrlA);
@@ -335,9 +385,16 @@ export function useGame(): UseGame {
         if (statusRef.current !== 'playing' || !boardA || !boardB) return;
         const now = performance.now();
 
-        if (boardA.control === 'human') runHumanBoard(boardA, boardB, now);
-        else if (boardA.control === 'ai') aiTick(boardA, boardB, now);
-        if (boardB.control === 'ai') aiTick(boardB, boardA, now);
+        if (boardA.control === 'human') {
+          runHumanBoard(boardA, boardB, now);
+        } else if (boardA.control === 'ai') {
+          advanceAnim(boardA, boardB, now);
+          aiTick(boardA, boardB, now);
+        }
+        if (boardB.control === 'ai') {
+          advanceAnim(boardB, boardA, now);
+          aiTick(boardB, boardA, now);
+        }
 
         // Publish every frame so stats / garbage meters stay current even when
         // a board is idle (e.g. garbage arriving from the opponent).
