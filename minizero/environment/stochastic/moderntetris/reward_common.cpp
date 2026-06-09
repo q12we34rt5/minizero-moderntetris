@@ -13,8 +13,11 @@ RewardConfig RewardConfig::fromGlobals()
     c.clear_2 = config::env_modern_tetris_reward_clear_2;
     c.clear_3 = config::env_modern_tetris_reward_clear_3;
     c.clear_4 = config::env_modern_tetris_reward_clear_4;
-    c.tspin_bonus = config::env_modern_tetris_reward_tspin_bonus;
-    c.tspin_mini_bonus = config::env_modern_tetris_reward_tspin_mini_bonus;
+    c.tspin_single_bonus = config::env_modern_tetris_reward_tspin_single_bonus;
+    c.tspin_double_bonus = config::env_modern_tetris_reward_tspin_double_bonus;
+    c.tspin_triple_bonus = config::env_modern_tetris_reward_tspin_triple_bonus;
+    c.tspin_mini_single_bonus = config::env_modern_tetris_reward_tspin_mini_single_bonus;
+    c.tspin_mini_double_bonus = config::env_modern_tetris_reward_tspin_mini_double_bonus;
     c.all_spin_bonus = config::env_modern_tetris_reward_all_spin_bonus;
     c.b2b_bonus = config::env_modern_tetris_reward_b2b_bonus;
     c.combo_bonus = config::env_modern_tetris_reward_combo_bonus;
@@ -50,7 +53,20 @@ float computeLockBaseReward(const engine::State& post, engine::PieceType locked_
         // reported as SPIN_MINI — we must inspect locked_piece to classify.
         if (post.spin_type == engine::SpinType::SPIN || post.spin_type == engine::SpinType::SPIN_MINI) {
             if (locked_piece == engine::PieceType::T) {
-                clear_reward += (post.spin_type == engine::SpinType::SPIN) ? cfg.tspin_bonus : cfg.tspin_mini_bonus;
+                if (post.spin_type == engine::SpinType::SPIN) {
+                    switch (post.lines_cleared) {
+                        case 1: clear_reward += cfg.tspin_single_bonus; break;
+                        case 2: clear_reward += cfg.tspin_double_bonus; break;
+                        case 3: clear_reward += cfg.tspin_triple_bonus; break;
+                        default: break;
+                    }
+                } else { // SPIN_MINI
+                    switch (post.lines_cleared) {
+                        case 1: clear_reward += cfg.tspin_mini_single_bonus; break;
+                        case 2: clear_reward += cfg.tspin_mini_double_bonus; break;
+                        default: break;
+                    }
+                }
             } else {
                 clear_reward += cfg.all_spin_bonus;
             }

@@ -38,10 +38,15 @@ struct RewardConfig {
     float clear_4;
 
     // Spin bonuses (applied only when the lock also cleared >=1 line).
-    // tspin_*  : T piece with SRS-detected T-spin (full or mini)
+    // tspin_*  : T piece with SRS-detected T-spin, split by clear count.
+    //            Quad is mathematically impossible for a T-spin; mini triple
+    //            is also impossible (mini means too few corners for 3 lines).
     // all_spin : any non-T piece that satisfied the engine's all-spin check
-    float tspin_bonus;
-    float tspin_mini_bonus;
+    float tspin_single_bonus;
+    float tspin_double_bonus;
+    float tspin_triple_bonus;
+    float tspin_mini_single_bonus;
+    float tspin_mini_double_bonus;
     float all_spin_bonus;
 
     // B2B / combo (applied only on successful clear)
