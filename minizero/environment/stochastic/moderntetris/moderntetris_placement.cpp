@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <limits>
 #include <sstream>
+#include <unordered_map>
 #include <utility>
 
 namespace minizero::env::moderntetris_placement {
@@ -213,12 +214,53 @@ void ModernTetrisPlacementEnv::rebuildLegalPlacements() const
     if (!placements_dirty_) { return; }
     cached_placements_.clear();
 
+    // Collapse placements onto one legal action per canonical *position*, matching
+    // fusion's canonical move set. Two things are merged:
+    //   (1) rotation symmetry: I-North/I-South, O's four rotations, etc. land on
+    //       the same cells (handled by canonicalizePlacement).
+    //   (2) spin vs non-spin to the same cells: fusion classifies each landing
+    //       position once, with spin winning over no-spin (NoSpin &= !spins). So
+    //       when the same canonical position is reachable both as a spin and a
+    //       plain drop, we keep the highest-value spin (full > mini > none) and
+    //       its result (its final_state carries the spin's attack / b2b credit).
+    // pos_key is the action id with the spin field zeroed -> the position identity.
+    std::unordered_map<int, std::size_t> pos_to_index;
+
+    const auto spinRank = [](engine::SpinType s) -> int {
+        switch (s) {
+            case engine::SpinType::SPIN: return 2;      // T-spin full
+            case engine::SpinType::SPIN_MINI: return 1; // T-spin mini / all-spin mini
+            default: return 0;                          // none
+        }
+    };
+
+    const auto addPlacements = [&](engine::PieceType piece, bool use_hold,
+                                   std::vector<engine::PlacementSearchResult>& placements) {
+        for (auto& p : placements) {
+            const CanonicalPlacement c = canonicalizePlacement(piece, p.lock_x, p.lock_y, p.orientation);
+            // Store the canonical geometry so getActionDescriptors() reports the
+            // same representative fusion would (the locked board in final_state
+            // is unchanged; only this label collapses onto its canonical form).
+            p.lock_x = static_cast<std::int8_t>(c.lock_x);
+            p.lock_y = static_cast<std::int8_t>(c.lock_y);
+            p.orientation = static_cast<std::uint8_t>(c.orientation);
+            const int pos_key = packPlacementId(use_hold, c.lock_x, c.lock_y, c.orientation, 0);
+            const int aid = packPlacementId(use_hold, c.lock_x, c.lock_y, c.orientation, static_cast<int>(p.spin_type));
+
+            auto it = pos_to_index.find(pos_key);
+            if (it == pos_to_index.end()) {
+                pos_to_index.emplace(pos_key, cached_placements_.size());
+                cached_placements_.push_back({aid, std::move(p)});
+            } else if (spinRank(p.spin_type) > spinRank(cached_placements_[it->second].result.spin_type)) {
+                cached_placements_[it->second].action_id = aid;
+                cached_placements_[it->second].result = std::move(p);
+            }
+        }
+    };
+
     // non-hold placements
     auto placements = engine::findPlacements(ctx_.state);
-    for (auto& p : placements) {
-        int aid = packPlacementId(false, p.lock_x, p.lock_y, p.orientation, static_cast<int>(p.spin_type));
-        cached_placements_.push_back({aid, std::move(p)});
-    }
+    addPlacements(ctx_.state.current, false, placements);
 
     // hold placements (only if not already held this turn)
     if (!ctx_.state.has_held) {
@@ -226,11 +268,7 @@ void ModernTetrisPlacementEnv::rebuildLegalPlacements() const
         engine::hold(&hold_state);
         if (hold_state.current != ctx_.state.current || ctx_.state.hold != engine::PieceType::NONE) {
             auto hold_placements = engine::findPlacements(hold_state);
-            for (auto& p : hold_placements) {
-                int aid = packPlacementId(true, p.lock_x, p.lock_y, p.orientation, static_cast<int>(p.spin_type));
-                // avoid duplicates (same lock pos but different hold status is distinct)
-                cached_placements_.push_back({aid, std::move(p)});
-            }
+            addPlacements(hold_state.current, true, hold_placements);
         }
     }
 
