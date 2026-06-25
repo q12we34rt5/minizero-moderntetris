@@ -235,6 +235,7 @@ struct State {
     // Configurations (TODO: pack configurations into a struct?)
     std::uint8_t max_garbage_spawn = 6;              // Maximum garbage lines that can be placed at once
     std::uint8_t /* bool */ garbage_blocking = true; // If true, clears temporarily block garbage placement
+    std::uint8_t /* bool */ all_spin = false;        // If true, enable the all-spin ruleset
 };
 
 // Super Rotation System (https://harddrop.com/wiki/SRS)

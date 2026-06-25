@@ -294,7 +294,7 @@ inline static std::pair<bool, bool> isTspin(State* state)
 }
 inline static bool isAllSpin(State* state)
 {
-    if (state->current == PieceType::T || !state->was_last_rotation) { return false; }
+    if (!state->was_last_rotation) { return false; }
     auto& piece = ops::getPiece(state->current, state->orientation);
     // check all-spin (piece cannot move left, right, up or down)
     bool collisions[4] = {
@@ -310,17 +310,10 @@ inline static SpinType getSpinType(State* state)
     if (state->current == PieceType::T) {
         auto [is_tspin, is_mini] = isTspin(state);
         if (is_tspin) { return is_mini ? SpinType::SPIN_MINI : SpinType::SPIN; }
-    } else if (isAllSpin(state)) {
-        return SpinType::SPIN_MINI;
     }
+    // specifically for the all-spin ruleset
+    if (state->all_spin && isAllSpin(state)) { return SpinType::SPIN_MINI; }
     return SpinType::NONE;
-}
-inline static bool isBackToBackSpinType(PieceType piece_type, SpinType spin_type)
-{
-    // current ruleset: tspin only
-    if (piece_type != PieceType::T) { return false; }
-    if (spin_type == SpinType::SPIN || spin_type == SpinType::SPIN_MINI) { return true; }
-    return false;
 }
 
 inline static int calculateAttack(const State* state)
@@ -341,42 +334,34 @@ inline static int calculateAttack(const State* state)
     // |                    |            ||      11 |          4 |
     // |                    |            ||     12+ |          5 |
     if (state->lines_cleared == 0) { return 0; }
-    bool is_tspin = state->current == PieceType::T && state->spin_type == SpinType::SPIN;
-    bool is_mini_tspin = state->current == PieceType::T && state->spin_type == SpinType::SPIN_MINI;
-    bool is_b2b = state->back_to_back_count > 0;
-    // --- Base attack ---
-    int base = 0;
-    if (is_tspin) {
-        // T-spin Single = 2, Double = 4, Triple = 6
-        base = state->lines_cleared << 1;
-    } else if (is_mini_tspin) {
-        // T-spin Mini Single = 0, Double = 4
-        base = (state->lines_cleared == 2) << 2;
+    const int lines = state->lines_cleared;
+    // calculate base attack
+    constexpr int tspin_attack_table[] = {0, 2, 4, 6};
+    constexpr int line_clear_attack_table[] = {0, 0, 1, 2, 4};
+    int attack;
+    if (state->perfect_clear) {
+        attack = 10;
+    } else if (state->spin_type == SpinType::SPIN) {
+        assert(lines >= 1 && lines <= 3);
+        attack = tspin_attack_table[lines];
+    } else if (state->spin_type == SpinType::SPIN_MINI && state->current == PieceType::T && lines == 2) {
+        attack = tspin_attack_table[lines]; // jstris scores a T-spin mini double as a full T-spin double
     } else {
-        // normal clears
-        switch (state->lines_cleared) {
-            case 1: base = 0; break;
-            case 2: base = 1; break;
-            case 3: base = 2; break;
-            case 4: base = 4; break;
-            default: assert(false); break;
-        }
+        assert(lines >= 1 && lines <= 4);
+        attack = line_clear_attack_table[lines];
     }
-    // --- Perfect Clear ---
-    if (state->perfect_clear) { base = 10; }
-    // --- Back-to-Back bonus ---
-    // B2B applies to Tetris and T-spins, but NOT Mini T-spin Singles
-    if (is_b2b && (state->lines_cleared >= 4 || is_tspin)) { base += 1; }
-    // --- Combo bonus ---
-    // combo_count: -1 = no combo, 0 = first clear (combo 0), 1 = second consecutive (combo 1), ...
+    // back-to-back bonus
+    if (state->back_to_back_count > 0 && (lines == 4 || state->spin_type != SpinType::NONE)) {
+        attack += 1;
+    }
+    // combo bonus
     constexpr int combo_table[] = {0, 0, 1, 1, 1, 2, 2, 3, 3, 4, 4, 4, 5};
     constexpr int combo_table_size = sizeof(combo_table) / sizeof(combo_table[0]);
     if (state->combo_count >= 0) {
-        int combo_index = state->combo_count;
-        if (combo_index >= combo_table_size) { combo_index = combo_table_size - 1; }
-        base += combo_table[combo_index];
+        const int index = state->combo_count < combo_table_size ? state->combo_count : combo_table_size - 1;
+        attack += combo_table[index];
     }
-    return base;
+    return attack;
 }
 
 inline static void applyGarbage(Board& board, int lines, int hole_position)
@@ -505,10 +490,12 @@ inline static void processPiecePlacement(State* state)
         }
         // update combo and back-to-back counts
         state->combo_count++;
-        state->back_to_back_count = (isBackToBackSpinType(state->current, state->spin_type) || state->lines_cleared == 4) // T-spin or Tetris
+        state->back_to_back_count = (state->spin_type != SpinType::NONE || state->lines_cleared == 4) // any spin or Tetris
                                         ? state->back_to_back_count + 1
                                         : -1;
     } else {
+        // no lines cleared: not a perfect clear, and the combo is broken
+        state->perfect_clear = false;
         state->combo_count = -1;
     }
     // calculate attack and counter garbage

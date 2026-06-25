@@ -86,6 +86,9 @@ void ModernTetrisEnv::reset(int seed)
     engine::step::setConfig(&ctx_, step_config);
     engine::step::setSeed(&ctx_, static_cast<std::uint32_t>(seed_), static_cast<std::uint32_t>(seed_ ^ 0x9e3779b9U));
     engine::step::reset(&ctx_);
+    ctx_.state.all_spin = config::env_modern_tetris_all_spin ? 1 : 0;
+    ctx_.state.garbage_blocking = config::env_modern_tetris_garbage_blocking ? 1 : 0;
+    ctx_.state.max_garbage_spawn = static_cast<std::uint8_t>(std::clamp(config::env_modern_tetris_max_garbage_spawn, 0, 255));
     resetActivePieceHistory();
     turn_ = Player::kPlayer1;
 }

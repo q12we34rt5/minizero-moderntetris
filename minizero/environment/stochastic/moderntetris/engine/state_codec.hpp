@@ -13,8 +13,8 @@
 
 namespace minizero::env::moderntetris::engine::codec {
 
-// 32 board rows + 14 next + 20 garbage_queue + 20 garbage_delay + 27 scalars.
-constexpr int STATE_CODEC_SIZE = BOARD_HEIGHT + 14 + 2 * GARBAGE_QUEUE_SIZE + 27;
+// 32 board rows + 14 next + 20 garbage_queue + 20 garbage_delay + 28 scalars.
+constexpr int STATE_CODEC_SIZE = BOARD_HEIGHT + 14 + 2 * GARBAGE_QUEUE_SIZE + 28;
 
 struct WriteCursor {
     std::int32_t* p;
@@ -62,6 +62,7 @@ void visit(Ctx& ctx, Cursor&& cur)
     for (int i = 0; i < GARBAGE_QUEUE_SIZE; ++i) { cur(s.garbage_delay[i]); }
     cur(s.max_garbage_spawn);
     cur(s.garbage_blocking);
+    cur(s.all_spin);
     cur(ctx.lifetime);
     cur(ctx.config.piece_life);
     cur(ctx.config.auto_drop);

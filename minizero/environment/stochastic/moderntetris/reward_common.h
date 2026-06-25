@@ -5,21 +5,28 @@
 namespace minizero::env::moderntetris::reward {
 
 /**
- * Per-lock reward shaping configuration. All weights are additive and can be
- * set to zero to disable that term. Caller is responsible for reading the
- * config globals via RewardConfig::fromGlobals().
+ * Per-lock reward shaping configuration. Caller reads the config globals via
+ * RewardConfig::fromGlobals().
  *
- * Structure of a typical reward per lock event:
+ * The attack reward is a weighted decomposition of the engine's raw attack, read
+ * from the post-lock state plus the locked piece, one value per attack component.
+ * With every attack_* knob at its default (the engine's Jstris value) and the
+ * combo weight at 1, the attack reward equals the engine's raw attack
+ * (state->attack) exactly -- this is the faithful baseline. Zero out components
+ * to run ablations (e.g. "only combo": set everything but attack_combo_weight to 0).
+ *
+ * NOTE: this is the raw, pre-garbage-counter attack -- it does NOT use
+ * post.lines_sent. The two differ only when pending garbage is countered; raw
+ * attack is the per-action offensive value and is what the components decompose.
+ *
+ * Structure of a reward per lock event:
  *
  *   base    = survival_bonus - (just_died ? death_penalty : 0)
- *   attack  = lines_sent_weight * post.lines_sent
- *   shape   = clear_N[post.lines_cleared] + spin_bonus(post) + b2b_bonus
- *           + combo_bonus * post.combo_count + perfect_clear_bonus?
+ *   attack  = depth_weight * weighted_decomposition(post, locked_piece)
  *   pot     = phi(post) - phi(pre)     where phi is potential-based shaping
+ *   total   = base + attack + pot
  *
- *   total   = base + attack + shape + pot
- *
- * base + attack + shape is computed by computeLockBaseReward().
+ * base + attack is computed by computeLockBaseReward().
  * phi is computed by computeBoardPotential(). Caller maintains prev phi.
  */
 struct RewardConfig {
@@ -27,38 +34,27 @@ struct RewardConfig {
     float survival_bonus;
     float death_penalty; // positive; caller subtracts on is_alive flip
 
-    // Baseline (engine's attack value already includes line count, spin, b2b, combo multipliers)
-    float lines_sent_weight;
+    // Attack components. Each is the attack value contributed when that event
+    // fires; defaults equal the engine's Jstris table so all-defaults reproduce
+    // state->attack. A perfect clear overrides the line/spin value with
+    // attack_pc. attack_allspin is an extra added on top of the normal-clear
+    // value for non-T spins (the engine itself scores them as normal clears).
+    float attack_single;            // 1-line clear (engine 0)
+    float attack_double;            // 2-line clear (engine 1)
+    float attack_triple;            // 3-line clear (engine 2)
+    float attack_tetris;            // 4-line clear (engine 4)
+    float attack_tspin_single;      // full T-spin, 1 line (engine 2)
+    float attack_tspin_double;      // full T-spin, 2 lines (engine 4)
+    float attack_tspin_triple;      // full T-spin, 3 lines (engine 6)
+    float attack_tspin_mini_single; // mini T-spin, 1 line (engine 0)
+    float attack_tspin_mini_double; // mini T-spin, 2 lines (engine 4, jstris: scored as a full T-spin double)
+    float attack_allspin;           // extra for non-T spin clears (engine 0)
+    float attack_pc;                // perfect clear, overrides base (engine 10)
+    float attack_b2b;               // qualifying back-to-back +1 (engine 1)
+    float attack_combo_weight;      // multiplies the engine combo-table value
 
-    // Explicit segmented line-clear bonus (on top of lines_sent). All zero by default
-    // to avoid double counting. Index 0 = no clear; unused.
-    float clear_1;
-    float clear_2;
-    float clear_3;
-    float clear_4;
-
-    // Spin bonuses (applied only when the lock also cleared >=1 line).
-    // tspin_*  : T piece with SRS-detected T-spin, split by clear count.
-    //            Quad is mathematically impossible for a T-spin; mini triple
-    //            is also impossible (mini means too few corners for 3 lines).
-    // all_spin : any non-T piece that satisfied the engine's all-spin check
-    float tspin_single_bonus;
-    float tspin_double_bonus;
-    float tspin_triple_bonus;
-    float tspin_mini_single_bonus;
-    float tspin_mini_double_bonus;
-    float all_spin_bonus;
-
-    // B2B / combo (applied only on successful clear)
-    float b2b_bonus;   // flat, added once when b2b_count > 0
-    float combo_bonus; // multiplied by combo_count
-
-    // Perfect clear
-    float perfect_clear_bonus;
-
-    // Depth-keyed multiplier applied to every clear-related reward term
-    // (lines_sent, clear_N, spin bonuses, b2b, combo, perfect_clear). Indexed
-    // by the piece's y-coordinate just before the lock (for the placement env:
+    // Depth-keyed multiplier applied to the whole attack bucket. Indexed by the
+    // piece's y-coordinate just before the lock (for the placement env:
     // PlacementSearchResult::lock_y). Weight = _top at y = BOARD_TOP, = _bottom
     // at y = BOARD_BOTTOM, linearly interpolated between. Out-of-range y is
     // clamped; locked_y < 0 disables the weight (defaults to 1.0).

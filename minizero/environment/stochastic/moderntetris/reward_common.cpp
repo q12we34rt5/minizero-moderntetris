@@ -1,27 +1,41 @@
 #include "reward_common.h"
 #include "configuration.h"
 
+#include <cassert>
+
 namespace minizero::env::moderntetris::reward {
+
+namespace {
+    // Jstris combo table, mirroring engine::calculateAttack (the engine keeps that
+    // function private and the table is frozen, so a small copy here is fine).
+    // combo_count: -1 = no combo, 0 = first clear, 1 = second consecutive, ...
+    int comboValue(int combo_count)
+    {
+        constexpr int combo_table[] = {0, 0, 1, 1, 1, 2, 2, 3, 3, 4, 4, 4, 5};
+        constexpr int n = sizeof(combo_table) / sizeof(combo_table[0]);
+        if (combo_count < 0) { return 0; }
+        return combo_table[combo_count < n ? combo_count : n - 1];
+    }
+} // namespace
 
 RewardConfig RewardConfig::fromGlobals()
 {
     RewardConfig c;
     c.survival_bonus = config::env_modern_tetris_reward_survival_bonus;
     c.death_penalty = config::env_modern_tetris_reward_death_penalty;
-    c.lines_sent_weight = config::env_modern_tetris_reward_lines_sent_weight;
-    c.clear_1 = config::env_modern_tetris_reward_clear_1;
-    c.clear_2 = config::env_modern_tetris_reward_clear_2;
-    c.clear_3 = config::env_modern_tetris_reward_clear_3;
-    c.clear_4 = config::env_modern_tetris_reward_clear_4;
-    c.tspin_single_bonus = config::env_modern_tetris_reward_tspin_single_bonus;
-    c.tspin_double_bonus = config::env_modern_tetris_reward_tspin_double_bonus;
-    c.tspin_triple_bonus = config::env_modern_tetris_reward_tspin_triple_bonus;
-    c.tspin_mini_single_bonus = config::env_modern_tetris_reward_tspin_mini_single_bonus;
-    c.tspin_mini_double_bonus = config::env_modern_tetris_reward_tspin_mini_double_bonus;
-    c.all_spin_bonus = config::env_modern_tetris_reward_all_spin_bonus;
-    c.b2b_bonus = config::env_modern_tetris_reward_b2b_bonus;
-    c.combo_bonus = config::env_modern_tetris_reward_combo_bonus;
-    c.perfect_clear_bonus = config::env_modern_tetris_reward_perfect_clear_bonus;
+    c.attack_single = config::env_modern_tetris_reward_attack_single;
+    c.attack_double = config::env_modern_tetris_reward_attack_double;
+    c.attack_triple = config::env_modern_tetris_reward_attack_triple;
+    c.attack_tetris = config::env_modern_tetris_reward_attack_tetris;
+    c.attack_tspin_single = config::env_modern_tetris_reward_attack_tspin_single;
+    c.attack_tspin_double = config::env_modern_tetris_reward_attack_tspin_double;
+    c.attack_tspin_triple = config::env_modern_tetris_reward_attack_tspin_triple;
+    c.attack_tspin_mini_single = config::env_modern_tetris_reward_attack_tspin_mini_single;
+    c.attack_tspin_mini_double = config::env_modern_tetris_reward_attack_tspin_mini_double;
+    c.attack_allspin = config::env_modern_tetris_reward_attack_allspin;
+    c.attack_pc = config::env_modern_tetris_reward_attack_pc;
+    c.attack_b2b = config::env_modern_tetris_reward_attack_b2b;
+    c.attack_combo_weight = config::env_modern_tetris_reward_attack_combo_weight;
     c.clear_depth_weight_bottom = config::env_modern_tetris_reward_clear_depth_weight_bottom;
     c.clear_depth_weight_top = config::env_modern_tetris_reward_clear_depth_weight_top;
     c.height_weight = config::env_modern_tetris_reward_height_weight;
@@ -34,50 +48,50 @@ float computeLockBaseReward(const engine::State& post, engine::PieceType locked_
     float r = cfg.survival_bonus;
     if (just_died) { r -= cfg.death_penalty; }
 
-    // Accumulate every reward term tied to clearing lines. This whole bucket is
-    // scaled by a depth multiplier below, so the agent learns to prefer
-    // clearing deep over clearing high.
-    float clear_reward = cfg.lines_sent_weight * static_cast<float>(post.lines_sent);
-
-    switch (post.lines_cleared) {
-        case 1: clear_reward += cfg.clear_1; break;
-        case 2: clear_reward += cfg.clear_2; break;
-        case 3: clear_reward += cfg.clear_3; break;
-        case 4: clear_reward += cfg.clear_4; break;
-        default: break;
-    }
-
-    if (post.lines_cleared > 0) {
-        // Engine convention: for T pieces, spin_type is SPIN (full T-spin) or
-        // SPIN_MINI (T-spin mini). For non-T pieces, any detected spin is
-        // reported as SPIN_MINI — we must inspect locked_piece to classify.
-        if (post.spin_type == engine::SpinType::SPIN || post.spin_type == engine::SpinType::SPIN_MINI) {
-            if (locked_piece == engine::PieceType::T) {
-                if (post.spin_type == engine::SpinType::SPIN) {
-                    switch (post.lines_cleared) {
-                        case 1: clear_reward += cfg.tspin_single_bonus; break;
-                        case 2: clear_reward += cfg.tspin_double_bonus; break;
-                        case 3: clear_reward += cfg.tspin_triple_bonus; break;
-                        default: break;
-                    }
-                } else { // SPIN_MINI
-                    switch (post.lines_cleared) {
-                        case 1: clear_reward += cfg.tspin_mini_single_bonus; break;
-                        case 2: clear_reward += cfg.tspin_mini_double_bonus; break;
-                        default: break;
-                    }
-                }
-            } else {
-                clear_reward += cfg.all_spin_bonus;
-            }
+    // Weighted decomposition of the engine's raw (pre-garbage-counter) attack,
+    // read straight from the post-lock state plus the piece that locked. With
+    // every attack_* at its engine default this reproduces state->attack exactly;
+    // zero components to ablate. (engine::calculateAttack is the canonical rule.)
+    // The bucket is scaled by a depth multiplier below, so the agent learns to
+    // prefer clearing deep over clearing high.
+    float clear_reward = 0.0f;
+    const int lines = post.lines_cleared;
+    if (lines > 0) {
+        if (post.perfect_clear) {
+            // Perfect clear overrides the line/spin value (mirrors calculateAttack).
+            clear_reward += cfg.attack_pc;
+        } else if (post.spin_type == engine::SpinType::SPIN) {
+            // Full T-spin (SpinType::SPIN is only ever produced for a T).
+            assert(locked_piece == engine::PieceType::T);
+            assert(lines >= 1 && lines <= 3);
+            clear_reward += (lines == 1) ? cfg.attack_tspin_single
+                                         : (lines == 2) ? cfg.attack_tspin_double
+                                                        : cfg.attack_tspin_triple;
+        } else if (post.spin_type == engine::SpinType::SPIN_MINI && locked_piece == engine::PieceType::T) {
+            // Mini T-spin (a real mini, or an immobile T under the all-spin ruleset).
+            // No mini-triple knob: a 3-line clear is never a T mini, so use the triple.
+            clear_reward += (lines == 1) ? cfg.attack_tspin_mini_single
+                                         : (lines == 2) ? cfg.attack_tspin_mini_double
+                                                        : cfg.attack_triple;
+        } else {
+            // Normal clear, and non-T all-spins (SPIN_MINI on a non-T, which the
+            // engine also scores as a normal clear) that additionally earn
+            // attack_allspin on top.
+            clear_reward += (lines == 1) ? cfg.attack_single
+                                         : (lines == 2) ? cfg.attack_double
+                                                        : (lines == 3) ? cfg.attack_triple
+                                                                       : cfg.attack_tetris;
+            if (post.spin_type == engine::SpinType::SPIN_MINI) { clear_reward += cfg.attack_allspin; }
         }
-        if (post.back_to_back_count > 0) { clear_reward += cfg.b2b_bonus; }
-        if (post.combo_count > 0) { clear_reward += cfg.combo_bonus * static_cast<float>(post.combo_count); }
+        // Qualifying back-to-back: a Tetris or any spin while a streak is active.
+        if (post.back_to_back_count > 0 && (lines == 4 || post.spin_type != engine::SpinType::NONE)) {
+            clear_reward += cfg.attack_b2b;
+        }
+        // Combo: the engine's saturating combo-table value, weighted.
+        clear_reward += cfg.attack_combo_weight * static_cast<float>(comboValue(post.combo_count));
     }
 
-    if (post.perfect_clear) { clear_reward += cfg.perfect_clear_bonus; }
-
-    // Depth-keyed multiplier on the whole clear bucket. locked_y < 0 leaves
+    // Depth-keyed multiplier on the whole attack bucket. locked_y < 0 leaves
     // the weight at 1.0 (callers without a pre-lock y are unaffected).
     float clear_weight = 1.0f;
     if (locked_y >= 0) {
