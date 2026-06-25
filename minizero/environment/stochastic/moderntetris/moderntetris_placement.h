@@ -86,34 +86,10 @@ inline UnpackedPlacement unpackPlacementId(int action_id)
 // placements that cover the same cells therefore share one action id, removing
 // the ~2x duplicate-shape inflation in moderntetris's enumeration (see
 // reports/placement-algorithm.md §6.3 and reports/performance.md §6).
-//
-// The (dx, dy) corrections below are derived from moderntetris's own 4x4 piece
-// tables (engine/tetris.hpp `pieces[]`), where a cell at grid (col c, row r)
-// maps to board (x + c, y + r):
-//   * O: all four rotations occupy identical cells -> orientation 0, no shift.
-//   * I/S/Z South(2): same cells as North(0) one bbox-row higher -> y + 1.
-//   * I/S/Z West(3):  same cells as East(1)  one column to the right -> x - 1.
-struct CanonicalPlacement {
-    int lock_x;
-    int lock_y;
-    int orientation;
-};
-
-inline CanonicalPlacement canonicalizePlacement(engine::PieceType piece, int lock_x, int lock_y, int orientation)
-{
-    switch (piece) {
-        case engine::PieceType::O:
-            return {lock_x, lock_y, 0};
-        case engine::PieceType::I:
-        case engine::PieceType::S:
-        case engine::PieceType::Z:
-            if (orientation == 2) { return {lock_x, lock_y + 1, 0}; } // South -> North
-            if (orientation == 3) { return {lock_x - 1, lock_y, 1}; } // West  -> East
-            return {lock_x, lock_y, orientation};                     // North / East unchanged
-        default:
-            return {lock_x, lock_y, orientation}; // L, J, T: all 4 distinct
-    }
-}
+// The function itself lives in engine/placement_search.hpp so the WASM frontend
+// can mirror this exact collapse when matching a backend placement to a path.
+using engine::canonicalizePlacement;
+using engine::CanonicalPlacement;
 
 void initialize();
 

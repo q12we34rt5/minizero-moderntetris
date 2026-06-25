@@ -35,7 +35,7 @@ const read = () => {
   return mod.HEAP32.subarray(base, base + VIEW_SIZE).slice();
 };
 
-mod._et_set_config(ctx, 0, 0);
+mod._et_set_config(ctx, 0, 0, 0);
 mod._et_reset(ctx, 12345);
 let v = read();
 

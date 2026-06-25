@@ -91,13 +91,16 @@ EMSCRIPTEN_KEEPALIVE
 void et_free(step::Context* ctx) { delete ctx; }
 
 // piece_life <= 0 disables forced hard drop (treated as effectively infinite).
+// all_spin enables the all-spin ruleset; it lives in State (reset() preserves it)
+// and rides the codec to the AI backend, so the web must set it to stay in sync.
 EMSCRIPTEN_KEEPALIVE
-void et_set_config(step::Context* ctx, int piece_life, int auto_drop)
+void et_set_config(step::Context* ctx, int piece_life, int auto_drop, int all_spin)
 {
     step::Config cfg;
     cfg.piece_life = (piece_life > 0) ? piece_life : 0x7fffffff;
     cfg.auto_drop = auto_drop ? 1 : 0;
     step::setConfig(ctx, cfg);
+    ctx->state.all_spin = all_spin ? 1 : 0;
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -223,8 +226,12 @@ int et_placement_path(step::Context* ctx, int use_hold, int lock_x, int lock_y,
     }
     const auto placements = eng::findPlacements(search_state);
     for (const auto& p : placements) {
-        if (p.lock_x == lock_x && p.lock_y == lock_y &&
-            p.orientation == orientation && static_cast<int>(p.spin_type) == spin_type) {
+        // The backend reports canonical geometry (canonicalizePlacement collapses
+        // symmetric O/I/S/Z poses), so canonicalize each raw placement before
+        // matching -- otherwise a canonicalized backend move has no raw twin here.
+        const auto c = eng::canonicalizePlacement(search_state.current, p.lock_x, p.lock_y, p.orientation);
+        if (c.lock_x == lock_x && c.lock_y == lock_y &&
+            c.orientation == orientation && static_cast<int>(p.spin_type) == spin_type) {
             for (const auto pa : p.path) { emit(placementActionToStepAction(pa)); }
             emit(step::Action::HARD_DROP);
             return n;
@@ -245,8 +252,10 @@ int et_apply_placement(step::Context* ctx, int use_hold, int lock_x, int lock_y,
     }
     const auto placements = eng::findPlacements(ctx->state);
     for (const auto& p : placements) {
-        if (p.lock_x == lock_x && p.lock_y == lock_y &&
-            p.orientation == orientation && static_cast<int>(p.spin_type) == spin_type) {
+        // Match against canonical geometry to mirror the backend (see et_placement_path).
+        const auto c = eng::canonicalizePlacement(ctx->state.current, p.lock_x, p.lock_y, p.orientation);
+        if (c.lock_x == lock_x && c.lock_y == lock_y &&
+            c.orientation == orientation && static_cast<int>(p.spin_type) == spin_type) {
             for (const auto pa : p.path) { step::step(ctx, placementActionToStepAction(pa)); }
             step::step(ctx, step::Action::HARD_DROP);
             return 1;

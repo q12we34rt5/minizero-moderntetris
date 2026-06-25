@@ -70,4 +70,34 @@ struct PlacementSearchResult {
  */
 std::vector<PlacementSearchResult> findPlacements(const State& initial_state);
 
+// Symmetric pieces have distinct (x, y, orientation) tuples that occupy the SAME
+// board cells; canonicalizePlacement collapses each onto one representative so a
+// placement has a single label. The (dx, dy) corrections are derived from the 4x4
+// piece tables (tetris.hpp `pieces[]`), where a cell at grid (col c, row r) maps
+// to board (x + c, y + r):
+//   * O: all four rotations occupy identical cells -> orientation 0, no shift.
+//   * I/S/Z South(2): same cells as North(0) one bbox-row higher -> y + 1.
+//   * I/S/Z West(3):  same cells as East(1)  one column to the right -> x - 1.
+struct CanonicalPlacement {
+    int lock_x;
+    int lock_y;
+    int orientation;
+};
+
+inline CanonicalPlacement canonicalizePlacement(PieceType piece, int lock_x, int lock_y, int orientation)
+{
+    switch (piece) {
+        case PieceType::O:
+            return {lock_x, lock_y, 0};
+        case PieceType::I:
+        case PieceType::S:
+        case PieceType::Z:
+            if (orientation == 2) { return {lock_x, lock_y + 1, 0}; } // South -> North
+            if (orientation == 3) { return {lock_x - 1, lock_y, 1}; } // West  -> East
+            return {lock_x, lock_y, orientation};                     // North / East unchanged
+        default:
+            return {lock_x, lock_y, orientation}; // L, J, T: all 4 distinct
+    }
+}
+
 } // namespace minizero::env::moderntetris::engine

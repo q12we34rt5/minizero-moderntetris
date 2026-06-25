@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useGame, type GameMode } from './game/useGame.ts';
 import { BoardPanel, type BoardOverlay } from './components/BoardPanel.tsx';
 import { SettingsPanel } from './components/SettingsPanel.tsx';
@@ -32,6 +33,13 @@ export default function App() {
   const game = useGame();
   const { mode, status, winner, hud, aiHud } = game;
   const [labelA, labelB] = boardLabels(mode);
+  const [dump, setDump] = useState('');
+
+  const onDump = () => {
+    const text = game.dumpState();
+    setDump(text);
+    void navigator.clipboard?.writeText(text).catch(() => {});
+  };
 
   const statusLabel =
     status === 'loading'
@@ -146,6 +154,19 @@ export default function App() {
               Reset
             </button>
           </div>
+          <div className="controls-row">
+            <label htmlFor="set-all-spin">All-Spin ruleset</label>
+            <input
+              id="set-all-spin"
+              type="checkbox"
+              checked={game.rules.allSpin}
+              onChange={(e) => game.setRules({ ...game.rules, allSpin: e.target.checked })}
+            />
+          </div>
+          <p className="hint">
+            All-Spin scores any immobile spin (not just 3-corner T-spins). Must match the
+            AI backend's env_modern_tetris_all_spin. Takes effect on Reset.
+          </p>
           {mode === 'pve' && (
             <p className="hint">
               Both boards share the same piece sequence. Clear lines to send garbage to the AI.
@@ -156,6 +177,22 @@ export default function App() {
               Two AIs play with different piece sequences. Point the two backend URLs at
               different models for a model-vs-model match.
             </p>
+          )}
+          <div className="controls-row">
+            <button className="btn" onClick={onDump}>
+              Dump State
+            </button>
+            <span className="hint">Copies a backend <code>set_state</code> command for the current position.</span>
+          </div>
+          {dump && (
+            <textarea
+              className="seed-input"
+              readOnly
+              rows={4}
+              style={{ width: '100%', fontFamily: 'monospace', fontSize: 11, marginTop: 6, resize: 'vertical' }}
+              value={dump}
+              onFocus={(e) => e.currentTarget.select()}
+            />
           )}
         </div>
       </div>

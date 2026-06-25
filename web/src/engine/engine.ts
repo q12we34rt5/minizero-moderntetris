@@ -46,9 +46,10 @@ export class Engine {
     return new Engine(mod, mod._et_create());
   }
 
-  /** piece_life <= 0 disables the forced hard drop. */
-  setConfig(pieceLife: number, autoDrop: boolean): void {
-    this.mod._et_set_config(this.ctx, pieceLife, autoDrop ? 1 : 0);
+  /** piece_life <= 0 disables the forced hard drop. allSpin enables the all-spin
+   *  ruleset (carried in the serialized state, so it must match the AI backend). */
+  setConfig(pieceLife: number, autoDrop: boolean, allSpin: boolean): void {
+    this.mod._et_set_config(this.ctx, pieceLife, autoDrop ? 1 : 0, allSpin ? 1 : 0);
   }
 
   reset(seed: number): void {

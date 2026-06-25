@@ -3,7 +3,7 @@ export interface EngineWasmModule {
   _et_view_size(): number;
   _et_create(): number;
   _et_free(ctx: number): void;
-  _et_set_config(ctx: number, pieceLife: number, autoDrop: number): void;
+  _et_set_config(ctx: number, pieceLife: number, autoDrop: number, allSpin: number): void;
   _et_reset(ctx: number, seed: number): void;
   _et_step(ctx: number, action: number): number;
   _et_add_garbage(ctx: number, lines: number, delay: number): number;

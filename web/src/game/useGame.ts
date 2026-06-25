@@ -33,8 +33,20 @@ const DEFAULT_PVE: PveSettings = {
   backendUrlB: 'ws://localhost:8001',
 };
 
+// Game-rule settings that change engine behavior in every mode (single/pve/eve).
+// all_spin rides the serialized state to the AI backend, so it must match the
+// backend's env_modern_tetris_all_spin in pve/eve.
+export interface RulesSettings {
+  allSpin: boolean;
+}
+
+const DEFAULT_RULES: RulesSettings = {
+  allSpin: false,
+};
+
 const SETTINGS_KEY = 'moderntetris-web-settings';
 const PVE_KEY = 'moderntetris-web-pve';
+const RULES_KEY = 'moderntetris-web-rules';
 const GAMEPAD_KEY = 'moderntetris-web-gamepad';
 
 function load<T>(key: string, fallback: T): T {
@@ -118,6 +130,8 @@ export interface UseGame {
   setSettings: (s: InputSettings) => void;
   pveSettings: PveSettings;
   setPveSettings: (s: PveSettings) => void;
+  rules: RulesSettings;
+  setRules: (r: RulesSettings) => void;
   gamepadMapping: GamepadMapping;
   setGamepadMapping: (m: GamepadMapping) => void;
   gamepadStatus: GamepadStatus;
@@ -126,6 +140,7 @@ export interface UseGame {
   reset: () => void;
   reconnectAi: () => void;
   togglePause: () => void;
+  dumpState: () => string;
 }
 
 export function useGame(): UseGame {
@@ -138,12 +153,14 @@ export function useGame(): UseGame {
   const [aiStatusB, setAiStatusB] = useState<AiConnectionStatus>('disconnected');
   const [settings, setSettingsState] = useState<InputSettings>(() => load(SETTINGS_KEY, DEFAULT_SETTINGS));
   const [pveSettings, setPveSettingsState] = useState<PveSettings>(() => load(PVE_KEY, DEFAULT_PVE));
+  const [rules, setRulesState] = useState<RulesSettings>(() => load(RULES_KEY, DEFAULT_RULES));
   const [gamepadMapping, setGamepadMappingState] = useState<GamepadMapping>(() => load(GAMEPAD_KEY, DEFAULT_GAMEPAD_MAPPING));
   const [gamepadStatus, setGamepadStatus] = useState<GamepadStatus>({ connected: false, id: null });
   const [seed, setSeedState] = useState('');
 
   const settingsRef = useRef(settings);
   const pveSettingsRef = useRef(pveSettings);
+  const rulesRef = useRef(rules);
   const gamepadMappingRef = useRef(gamepadMapping);
   const modeRef = useRef(mode);
   const seedRef = useRef(seed);
@@ -153,6 +170,7 @@ export function useGame(): UseGame {
   const resetRef = useRef<() => void>(() => {});
   const reconnectRef = useRef<() => void>(() => {});
   const pauseRef = useRef<() => void>(() => {});
+  const dumpStateRef = useRef<() => string>(() => '');
 
   const setSettings = useCallback((s: InputSettings) => {
     settingsRef.current = s;
@@ -164,6 +182,12 @@ export function useGame(): UseGame {
     pveSettingsRef.current = s;
     setPveSettingsState(s);
     save(PVE_KEY, s);
+  }, []);
+
+  const setRules = useCallback((r: RulesSettings) => {
+    rulesRef.current = r;
+    setRulesState(r);
+    save(RULES_KEY, r);
   }, []);
 
   const setGamepadMapping = useCallback((m: GamepadMapping) => {
@@ -180,6 +204,7 @@ export function useGame(): UseGame {
   const reset = useCallback(() => resetRef.current(), []);
   const reconnectAi = useCallback(() => reconnectRef.current(), []);
   const togglePause = useCallback(() => pauseRef.current(), []);
+  const dumpState = useCallback(() => dumpStateRef.current(), []);
 
   const setMode = useCallback((m: GameMode) => {
     modeRef.current = m;
@@ -342,7 +367,8 @@ export function useGame(): UseGame {
         // seed for B so a same-model match still diverges into a real game.
         const seedB = m === 'eve' ? (seedA ^ 0x5bd1e995) >>> 0 : seedA;
 
-        boardA.engine.setConfig(0, false); // piece_life disabled, client-side gravity
+        const allSpin = rulesRef.current.allSpin;
+        boardA.engine.setConfig(0, false, allSpin); // piece_life disabled, client-side gravity
         boardA.engine.reset(seedA);
         boardA.clock = newClock();
         boardA.pending = false;
@@ -350,7 +376,7 @@ export function useGame(): UseGame {
         boardA.anim = null;
 
         if (cB !== 'none') {
-          boardB.engine.setConfig(0, false);
+          boardB.engine.setConfig(0, false, allSpin);
           boardB.engine.reset(seedB);
           boardB.clock = newClock();
           boardB.pending = false;
@@ -371,6 +397,17 @@ export function useGame(): UseGame {
         setAiHud(cB !== 'none' ? makeHud(boardB.engine.read(), boardB.clock) : null);
       };
       resetRef.current = doReset;
+
+      // Dump the live engine state(s) as backend `set_state` commands. The flat
+      // codec ints are exactly what cmdSetState expects, so a dumped line can be
+      // pasted into the console to reproduce a position (e.g. a sudden game over).
+      dumpStateRef.current = () => {
+        if (!boardA) return '';
+        const dumpBoard = (b: BoardRuntime) => `# Board ${b.id} (alive=${b.engine.read().isAlive})\nset_state ${Array.from(b.engine.serializeFull()).join(' ')}`;
+        const parts = [dumpBoard(boardA)];
+        if (boardB && boardB.control !== 'none') parts.push(dumpBoard(boardB));
+        return parts.join('\n\n');
+      };
 
       reconnectRef.current = () => {
         if (!boardA || !boardB) return;
@@ -448,6 +485,8 @@ export function useGame(): UseGame {
     setSettings,
     pveSettings,
     setPveSettings,
+    rules,
+    setRules,
     gamepadMapping,
     setGamepadMapping,
     gamepadStatus,
@@ -456,5 +495,6 @@ export function useGame(): UseGame {
     reset,
     reconnectAi,
     togglePause,
+    dumpState,
   };
 }
