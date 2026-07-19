@@ -64,6 +64,7 @@ PYBIND11_MODULE(minizero_py, m)
     m.def("get_nn_placement_n_heads", []() { return config::nn_placement_n_heads; });
     m.def("get_nn_placement_mlp_ratio", []() { return config::nn_placement_mlp_ratio; });
     m.def("get_nn_placement_dropout", []() { return config::nn_placement_dropout; });
+    m.def("get_nn_placement_backbone", []() { return config::nn_placement_backbone; });
     m.def("get_env_modern_tetris_num_preview_piece", []() { return config::env_modern_tetris_num_preview_piece; });
 
     py::class_<learner::DataLoader>(m, "DataLoader")

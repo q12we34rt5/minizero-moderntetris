@@ -175,6 +175,7 @@ class Model:
                 "n_layers": py.get_nn_placement_n_layers(),
                 "mlp_ratio": py.get_nn_placement_mlp_ratio(),
                 "dropout": py.get_nn_placement_dropout(),
+                "backbone": py.get_nn_placement_backbone(),
             }
         self.network = create_network(py.get_game_name(),
                                       py.get_nn_num_input_channels(),

@@ -4,6 +4,35 @@ import torch.nn.functional as F
 from typing import Dict
 
 
+# --- Lock-position coordinate range -----------------------------------------
+#
+# PlacementActionDescriptor.lock_x/lock_y are the piece's 4x4 bounding-box ANCHOR
+# in playfield coords (engine x/y minus BOARD_LEFT=3 / BOARD_TOP=9), NOT an
+# occupied cell. Because a shape's left column / top row can be empty, and because
+# the engine board keeps 9 hidden buffer rows above the visible board, the anchor
+# legitimately falls outside [0, W-1] x [0, H-1].
+#
+# Enumerating engine/tetris.hpp `pieces[]` against the wall bounds, plus
+# placement_search.hpp canonicalizePlacement's (lock_y+1 / lock_x-1) shifts:
+#
+#     lock_x in [-2, 8]    (min: vertical I hugging the left wall)
+#     lock_y in [-9, 18]   (min: piece locked in the hidden spawn buffer)
+#
+# So the position table is OFFSET and WIDENED rather than clamped -- clamping to
+# [0, W-1] x [0, H-1] would alias lock_x in {-2,-1,0} onto one embedding and
+# collapse all 9 buffer rows onto visible row 0, making high placements and
+# left-wall placements indistinguishable to the network.
+#
+# Index = lock + OFFSET; table spans OFFSET + board_dim entries (1 spare each).
+LOCK_X_OFFSET = 2  # covers lock_x in [-2, board_width  - 1 + 2]
+LOCK_Y_OFFSET = 9  # == engine::BOARD_TOP (hidden buffer height)
+
+
+def lock_grid_size(board_height: int, board_width: int):
+    """(grid_h, grid_w) of the lock-position table, indexed by lock + offset."""
+    return board_height + LOCK_Y_OFFSET, board_width + LOCK_X_OFFSET
+
+
 class BoardPatchEmbed(nn.Module):
     """[B, C, H, W] -> [B, n_patches, d_model] with learnable 2D pos embed."""
 
@@ -114,6 +143,10 @@ class ActionTokenEmbed(nn.Module):
         super().__init__()
         self.board_height = board_height
         self.board_width = board_width
+        # Lock anchors live outside the visible board; see LOCK_*_OFFSET above.
+        self.lock_grid_h, self.lock_grid_w = lock_grid_size(board_height, board_width)
+        self.lock_x_offset = LOCK_X_OFFSET
+        self.lock_y_offset = LOCK_Y_OFFSET
         # Per-field embeddings
         self.use_hold_embed = nn.Embedding(2, d_model)
         self.orient_embed = nn.Embedding(num_orientations, d_model)
@@ -121,7 +154,7 @@ class ActionTokenEmbed(nn.Module):
         self.piece_embed = nn.Embedding(num_piece_types, d_model)
         self.lines_cleared_embed = nn.Embedding(max_lines_cleared, d_model)
         # 2D lock position embedding (flattened)
-        self.lock_pos_embed = nn.Parameter(torch.zeros(1, board_height * board_width, d_model))
+        self.lock_pos_embed = nn.Parameter(torch.zeros(1, self.lock_grid_h * self.lock_grid_w, d_model))
         self.type_embed = nn.Parameter(torch.zeros(1, 1, d_model))
         self.mix = nn.Linear(d_model * 5, d_model)
         nn.init.trunc_normal_(self.lock_pos_embed, std=0.02)
@@ -139,8 +172,11 @@ class ActionTokenEmbed(nn.Module):
             self.lines_cleared_embed(lines_cleared),
         ], dim=-1)                                                                    # [B, N, 5d]
         x = self.mix(feats)                                                           # [B, N, d]
-        flat_idx = (lock_y.clamp(0, self.board_height - 1) * self.board_width
-                    + lock_x.clamp(0, self.board_width - 1))                          # [B, N]
+        # Shift the anchor into the widened grid. The clamps are a safety net for
+        # padded slots / unexpected descriptors; real placements never trigger them.
+        iy = (lock_y + self.lock_y_offset).clamp(0, self.lock_grid_h - 1)
+        ix = (lock_x + self.lock_x_offset).clamp(0, self.lock_grid_w - 1)
+        flat_idx = iy * self.lock_grid_w + ix                                         # [B, N]
         pos = self.lock_pos_embed.squeeze(0)[flat_idx]                                # [B, N, d]
         x = x + pos + self.type_embed
         return x
@@ -201,18 +237,8 @@ class PlacementTransformerNetwork(nn.Module):
         )
         self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
 
-        # Policy head: two paths summed to prevent transformer self-attention
-        # from averaging away per-action differences (empirically the cause of
-        # policy loss stuck at log(N) — see training diagnostics 2026-04-20).
-        # policy_head_ctx: context-aware path over post-encoder hidden
-        # policy_head_direct: direct path over pre-encoder action embedding
-        self.policy_head_ctx = nn.Sequential(
-            nn.LayerNorm(d_model),
-            nn.Linear(d_model, d_model),
-            nn.GELU(),
-            nn.Linear(d_model, 1),
-        )
-        self.policy_head_direct = nn.Sequential(
+        # Policy head: context-aware path over post-encoder hidden states.
+        self.policy_head = nn.Sequential(
             nn.LayerNorm(d_model),
             nn.Linear(d_model, d_model),
             nn.GELU(),
@@ -311,13 +337,8 @@ class PlacementTransformerNetwork(nn.Module):
         h_value = h[:, value_idx, :]                                                  # [B, d]
         h_actions = h[:, n_fixed:, :]                                                 # [B, N_max, d]
 
-        # Policy logits: [B, N_max]
-        # Two parallel paths summed. policy_head_direct operates on the raw
-        # pre-encoder action embedding (keeps per-action distinction); policy_head_ctx
-        # operates on the post-encoder hidden (context-aware refinement).
-        policy_logit_ctx = self.policy_head_ctx(h_actions).squeeze(-1)
-        policy_logit_direct = self.policy_head_direct(actions_pre).squeeze(-1)
-        policy_logit = policy_logit_ctx + policy_logit_direct
+        # Policy logits: [B, N_max] over the post-encoder action hidden states.
+        policy_logit = self.policy_head(h_actions).squeeze(-1)
         # Mask padded positions to large-negative so softmax assigns zero probability.
         # (torch.finfo is not available in TorchScript on some versions.)
         policy_logit = policy_logit.masked_fill(action_mask.to(torch.bool), -1e9)
@@ -355,8 +376,9 @@ def _smoke_test():
     b2b = torch.randint(0, 2, (B,)).float()
     garbage = torch.rand(B)
     a_use_hold = torch.randint(0, 2, (B, N_max))
-    a_lock_x = torch.randint(0, 10, (B, N_max))
-    a_lock_y = torch.randint(0, 20, (B, N_max))
+    # full real descriptor range: lock_x in [-2, 8], lock_y in [-9, 18]
+    a_lock_x = torch.randint(-2, 9, (B, N_max))
+    a_lock_y = torch.randint(-9, 19, (B, N_max))
     a_orient = torch.randint(0, 4, (B, N_max))
     a_spin = torch.randint(0, 3, (B, N_max))
     a_piece = torch.randint(0, 7, (B, N_max))
