@@ -14,6 +14,9 @@ void MCTSNode::reset()
     policy_noise_ = 0.0f;
     value_ = 0.0f;
     reward_ = 0.0f;
+    env_mean_[0] = 0.0f;
+    env_mean_[1] = 0.0f;
+    winloss_mean_ = 0.0f;
     first_child_ = nullptr;
     env_.reset();
 }
@@ -38,8 +41,50 @@ void MCTSNode::remove(float value, float weight /* = 1.0f */)
     }
 }
 
+void MCTSNode::addTwoPlayerStats(float env_p1, float env_p2, float winloss, float weight /* = 1.0f */)
+{
+    if (count_ + weight <= 0) {
+        reset();
+        return;
+    }
+    count_ += weight;
+    env_mean_[0] += weight * (env_p1 - env_mean_[0]) / count_;
+    env_mean_[1] += weight * (env_p2 - env_mean_[1]) / count_;
+    winloss_mean_ += weight * (winloss - winloss_mean_) / count_;
+    // Mirror the to-move player's env mean into mean_ so getMean()-based
+    // consumers (the recorded V tag) read this position's env value from the
+    // perspective of the player about to move (action_.getPlayer() is the player
+    // who moved INTO this node, i.e. the opponent of the to-move player).
+    const int mover = (action_.getPlayer() == env::Player::kPlayer2) ? 1 : 0;
+    mean_ = env_mean_[1 - mover];
+}
+
 float MCTSNode::getNormalizedMean(const std::map<float, int>& tree_value_bound) const
 {
+    if (config::env_modern_tetris_two_player) {
+        // Scalarized two-player Q from the perspective of the player who moved
+        // into this node (action_.getPlayer()): Q = normalized_env_Q + lambda *
+        // flipped_winloss_Q. The env component is that player's own return
+        // (reward_ + discount * their env mean); it is min-max normalized to
+        // [-1, 1] via tree_value_bound so it is comparable to win/loss (already
+        // in [-1, 1]) and lambda meaningfully trades the two off.
+        const int mover = (action_.getPlayer() == env::Player::kPlayer2) ? 1 : 0;
+        float env_q = reward_ + config::actor_mcts_reward_discount * env_mean_[mover];
+        if (tree_value_bound.size() >= 2) {
+            const float lo = tree_value_bound.begin()->first;
+            const float hi = tree_value_bound.rbegin()->first;
+            if (hi > lo) {
+                env_q = (env_q - lo) / (hi - lo);
+                env_q = fmin(1.0f, fmax(-1.0f, 2.0f * env_q - 1.0f));
+            }
+        }
+        float winloss_q = winloss_mean_;
+        winloss_q = (action_.getPlayer() == env::charToPlayer(config::actor_mcts_value_flipping_player) ? -winloss_q : winloss_q);
+        float q = env_q + config::actor_env_winloss_lambda * winloss_q;
+        q = (q * count_ - virtual_loss_) / getCountWithVirtualLoss();
+        return q;
+    }
+
     float value = reward_ + config::actor_mcts_reward_discount * mean_;
     if (config::actor_mcts_value_rescale) {
         if (tree_value_bound.size() < 2) { return 1.0f; }
@@ -187,6 +232,41 @@ void MCTS::backup(const std::vector<MCTSNode*>& node_path, const float value, co
     }
 }
 
+void MCTS::backupTwoPlayerPlacement(const std::vector<MCTSNode*>& node_path, float env_self, float env_opp, float winloss, float leaf_reward)
+{
+    assert(node_path.size() > 0);
+    const float discount = config::actor_mcts_reward_discount;
+    MCTSNode* leaf = node_path.back();
+    leaf->setReward(leaf_reward);
+    leaf->setValue(env_self);
+
+    // Running env returns, one per player index (0 = kPlayer1, 1 = kPlayer2).
+    // The leaf's to-move player (whose env value the network reports as
+    // env_self) is the opposite of the player who moved into the leaf.
+    const int leaf_mover = (leaf->getAction().getPlayer() == env::Player::kPlayer2) ? 1 : 0;
+    float env_g[2];
+    env_g[1 - leaf_mover] = env_self; // to-move player's own env value
+    env_g[leaf_mover] = env_opp;      // opponent's env value (0 without a 2-output env head)
+    float wl = winloss;               // to-move player's win/loss; flipped at read
+
+    for (int i = static_cast<int>(node_path.size()) - 1; i >= 0; --i) {
+        MCTSNode* node = node_path[i];
+        const int m = (node->getAction().getPlayer() == env::Player::kPlayer2) ? 1 : 0;
+        // Track the env Q used by getNormalizedMean (reward_ + discount * env
+        // mean of the player who moved into this node) in the value bound so it
+        // can be min-max normalized against win/loss.
+        const float old_env_q = node->getReward() + discount * node->getEnvMean(m);
+        node->addTwoPlayerStats(env_g[0], env_g[1], wl);
+        updateTreeValueBound(old_env_q, node->getReward() + discount * node->getEnvMean(m));
+        // Fold this node's env reward into its own mover's chain only (the
+        // opponent's chain passes through untouched -- "skip the opponent
+        // layer"). Win/loss carries no per-step reward; discount applies per ply
+        // and the flip is done at read time.
+        env_g[m] = node->getReward() + discount * env_g[m];
+        wl = discount * wl;
+    }
+}
+
 MCTSNode* MCTS::selectChildByPUCTScore(const MCTSNode* node) const
 {
     assert(node && !node->isLeaf());
@@ -227,7 +307,10 @@ float MCTS::calculateInitQValue(const MCTSNode* node) const
 
 void MCTS::updateTreeValueBound(float old_value, float new_value)
 {
-    if (!config::actor_mcts_value_rescale) { return; }
+    // Two-player mode always maintains the bound so the env component can be
+    // min-max normalized against win/loss (see getNormalizedMean), independent
+    // of the actor_mcts_value_rescale knob.
+    if (!config::actor_mcts_value_rescale && !config::env_modern_tetris_two_player) { return; }
     if (tree_value_bound_.count(old_value)) {
         assert(tree_value_bound_[old_value] > 0);
         --tree_value_bound_[old_value];

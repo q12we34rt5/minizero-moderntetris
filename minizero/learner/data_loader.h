@@ -43,6 +43,7 @@ public:
     float* placement_combo_ = nullptr;             // [B]
     float* placement_back_to_back_ = nullptr;      // [B]
     float* placement_garbage_ = nullptr;           // [B]
+    float* placement_winloss_ = nullptr;           // [B * winloss_value_size], two-player only
     int64_t* placement_action_use_hold_ = nullptr; // [B * N_max]
     int64_t* placement_action_lock_x_ = nullptr;
     int64_t* placement_action_lock_y_ = nullptr;

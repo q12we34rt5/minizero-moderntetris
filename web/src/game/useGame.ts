@@ -17,6 +17,8 @@ export interface GameHud {
   view: GameView;
   pps: number;
   apm: number;
+  /** Extra AI info for this board (key->value), rendered generically. Empty for human boards. */
+  aiInfo: Record<string, string>;
 }
 
 export interface PveSettings {
@@ -84,7 +86,7 @@ function newClock(): BoardClock {
   return { pieceCount: 0, startTime: 0, firstPiece: false };
 }
 
-function makeHud(view: GameView, clock: BoardClock): GameHud {
+function makeHud(view: GameView, clock: BoardClock, aiInfo: Record<string, string> = {}): GameHud {
   let pps = 0;
   let apm = 0;
   if (clock.firstPiece) {
@@ -94,7 +96,7 @@ function makeHud(view: GameView, clock: BoardClock): GameHud {
       apm = (view.totalAttack / elapsed) * 60;
     }
   }
-  return { view, pps, apm };
+  return { view, pps, apm, aiInfo };
 }
 
 /** An in-progress AI move being played out step-by-step for animation. */
@@ -115,6 +117,7 @@ interface BoardRuntime {
   pending: boolean; // an AI request is in flight
   lastRequest: number;
   anim: AiAnim | null; // an AI move currently being animated
+  aiInfo: Record<string, string>; // latest extra info from the AI backend (value/winloss/...)
 }
 
 export interface UseGame {
@@ -243,8 +246,8 @@ export function useGame(): UseGame {
         eb.dispose();
         return;
       }
-      boardA = { id: 'A', engine: ea, client: clientA, control: 'human', clock: newClock(), pending: false, lastRequest: 0, anim: null };
-      boardB = { id: 'B', engine: eb, client: clientB, control: 'none', clock: newClock(), pending: false, lastRequest: 0, anim: null };
+      boardA = { id: 'A', engine: ea, client: clientA, control: 'human', clock: newClock(), pending: false, lastRequest: 0, anim: null, aiInfo: {} };
+      boardB = { id: 'B', engine: eb, client: clientB, control: 'none', clock: newClock(), pending: false, lastRequest: 0, anim: null, aiInfo: {} };
 
       const garbageDelay = () => pveSettingsRef.current.garbageDelay;
       const sendGarbage = (lines: number, opponent: BoardRuntime) => {
@@ -261,10 +264,16 @@ export function useGame(): UseGame {
         board.lastRequest = now;
         const requestGen = gen;
         const state = board.engine.serializeFull();
+        // In two-player play, hand the AI the real opponent board so its
+        // two-player search sees it. With no opponent (single board) the
+        // backend falls back to an empty opponent.
+        const opponentState = opponent.control === 'none' ? undefined : opponent.engine.serializeFull();
         board.client
-          .requestMove(state)
-          .then((placement) => {
+          .requestMove(state, opponentState)
+          .then((move) => {
             board.pending = false;
+            board.aiInfo = move.info;
+            const placement = move.placement;
             if (cancelled || requestGen !== gen || statusRef.current !== 'playing') return;
             const loser: Winner = opponent.control === 'none' ? null : opponent.id;
             if (placement === null) {
@@ -393,8 +402,8 @@ export function useGame(): UseGame {
 
         setWinner(null);
         setStatusBoth('playing');
-        setHud(makeHud(boardA.engine.read(), boardA.clock));
-        setAiHud(cB !== 'none' ? makeHud(boardB.engine.read(), boardB.clock) : null);
+        setHud(makeHud(boardA.engine.read(), boardA.clock, boardA.aiInfo));
+        setAiHud(cB !== 'none' ? makeHud(boardB.engine.read(), boardB.clock, boardB.aiInfo) : null);
       };
       resetRef.current = doReset;
 
@@ -451,8 +460,8 @@ export function useGame(): UseGame {
 
         // Publish every frame so stats / garbage meters stay current even when
         // a board is idle (e.g. garbage arriving from the opponent).
-        setHud(makeHud(boardA.engine.read(), boardA.clock));
-        setAiHud(boardB.control !== 'none' ? makeHud(boardB.engine.read(), boardB.clock) : null);
+        setHud(makeHud(boardA.engine.read(), boardA.clock, boardA.aiInfo));
+        setAiHud(boardB.control !== 'none' ? makeHud(boardB.engine.read(), boardB.clock, boardB.aiInfo) : null);
       };
 
       doReset();

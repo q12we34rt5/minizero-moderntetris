@@ -45,11 +45,18 @@ class MinizeroDadaLoader:
         B = py.get_batch_size()
         N = py.DataLoader.placement_n_max()
         prev = py.get_env_modern_tetris_num_preview_piece()
+        C = py.get_nn_num_input_channels()  # 1 single-player, 2 two-player (mover + opponent)
         H = py.get_nn_input_channel_height()
         W = py.get_nn_input_channel_width()
-        self._pl_board = np.zeros(B * 1 * H * W, dtype=np.float32)
+        self._pl_channels = C
+        self._pl_winloss_size = py.get_placement_winloss_value_size()  # 0 disables the head (single-player)
+        self._pl_board = np.zeros(B * C * H * W, dtype=np.float32)
         self.policy = np.zeros(B * N, dtype=np.float32)
         self.value = np.zeros(B * py.get_nn_discrete_value_size(), dtype=np.float32)
+        # Always allocate at least 1 element so the pybind array_t is valid; the
+        # C++ side keys on winloss.size() > 0 and on two_player to decide whether
+        # to fill it.
+        self.winloss = np.zeros(B * max(1, self._pl_winloss_size), dtype=np.float32)
         self._pl_current = np.zeros(B, dtype=np.int64)
         self._pl_hold = np.zeros(B, dtype=np.int64)
         self._pl_has_held = np.zeros(B, dtype=np.float32)
@@ -77,7 +84,7 @@ class MinizeroDadaLoader:
         # Reset mask to padded before each sample (C++ side writes valid positions).
         self._pl_a_mask.fill(1)
         self.data_loader.sample_data_placement(
-            self._pl_board, self.policy, self.value, self.loss_scale, self.sampled_index,
+            self._pl_board, self.policy, self.value, self.winloss, self.loss_scale, self.sampled_index,
             self._pl_current, self._pl_hold, self._pl_has_held, self._pl_preview,
             self._pl_was_rotation, self._pl_srs, self._pl_combo,
             self._pl_b2b, self._pl_garbage,
@@ -100,7 +107,7 @@ class MinizeroDadaLoader:
             return torch.from_numpy(a.reshape(shape)).to(device)
 
         batch = {
-            "board": t(self._pl_board, (B, 1, py.get_nn_input_channel_height(), py.get_nn_input_channel_width())),
+            "board": t(self._pl_board, (B, self._pl_channels, py.get_nn_input_channel_height(), py.get_nn_input_channel_width())),
             "current": t(self._pl_current, (B,)),
             "hold": t(self._pl_hold, (B,)),
             "has_held": t(self._pl_has_held, (B,)),
@@ -121,9 +128,12 @@ class MinizeroDadaLoader:
         }
         policy = torch.FloatTensor(self.policy.reshape(B, N)[:, :Nr].copy()).to(device)
         value = torch.FloatTensor(self.value).view(B, py.get_nn_discrete_value_size()).to(device)
+        winloss = None
+        if self._pl_winloss_size > 0:
+            winloss = torch.FloatTensor(self.winloss).view(B, self._pl_winloss_size).to(device)
         loss_scale = torch.FloatTensor(self.loss_scale / max(1e-8, float(np.amax(self.loss_scale)))).to(device)
         sampled_index = self.sampled_index
-        return batch, policy, value, loss_scale, sampled_index
+        return batch, policy, value, winloss, loss_scale, sampled_index
 
     def load_data(self, training_dir, start_iter, end_iter):
         for i in range(start_iter, end_iter + 1):
@@ -176,6 +186,8 @@ class Model:
                 "mlp_ratio": py.get_nn_placement_mlp_ratio(),
                 "dropout": py.get_nn_placement_dropout(),
                 "backbone": py.get_nn_placement_backbone(),
+                # 3-class {lose, draw, win} head in two-player mode; 0 disables it.
+                "winloss_value_size": 3 if py.get_env_modern_tetris_two_player() else 0,
             }
         self.network = create_network(py.get_game_name(),
                                       py.get_nn_num_input_channels(),
@@ -286,7 +298,7 @@ def train(model, training_dir, data_loader, start_iter, end_iter):
                 for g in model.optimizer.param_groups:
                     g["lr"] = base_lr
 
-            batch, label_policy, label_value, loss_scale, _ = data_loader._sample_placement(model.device)
+            batch, label_policy, label_value, label_winloss, loss_scale, _ = data_loader._sample_placement(model.device)
             network_output = model.network(batch["board"], batch["current"], batch["hold"], batch["has_held"],
                                            batch["preview"], batch["was_rotation"], batch["srs"],
                                            batch["combo"], batch["b2b"], batch["garbage"],
@@ -302,6 +314,11 @@ def train(model, training_dir, data_loader, start_iter, end_iter):
             loss = loss_policy + py.get_value_loss_scale() * loss_value
             add_training_info(training_info, 'loss_policy', loss_policy.item())
             add_training_info(training_info, 'loss_value', loss_value.item())
+            # Two-player win/loss head: distributional cross-entropy over {lose, draw, win}.
+            if label_winloss is not None and "winloss_logit" in network_output:
+                loss_winloss = -((label_winloss * nn.functional.log_softmax(network_output["winloss_logit"], dim=1)).sum(dim=1) * loss_scale).mean()
+                loss = loss + py.get_value_loss_scale() * loss_winloss
+                add_training_info(training_info, 'loss_winloss', loss_winloss.item())
             loss.backward()
             model.optimizer.step()
             model.scheduler.step()

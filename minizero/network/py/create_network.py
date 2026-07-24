@@ -39,7 +39,7 @@ def create_network(game_name="tietactoe",
         if backbone in ("mlp_flat", "mlp_conv"):
             network = PlacementMLPNetwork(
                 game_name=game_name,
-                board_channels=1,
+                board_channels=num_input_channels,
                 board_height=input_channel_height,
                 board_width=input_channel_width,
                 num_piece_types=7,
@@ -55,7 +55,7 @@ def create_network(game_name="tietactoe",
         else:
             network = PlacementTransformerNetwork(
                 game_name=game_name,
-                board_channels=1,
+                board_channels=num_input_channels,
                 board_height=input_channel_height,
                 board_width=input_channel_width,
                 patch_size=5,
@@ -68,6 +68,7 @@ def create_network(game_name="tietactoe",
                 dropout=cfg.get("dropout", 0.1),
                 num_value_hidden_channels=num_value_hidden_channels,
                 discrete_value_size=discrete_value_size,
+                winloss_value_size=cfg.get("winloss_value_size", 0),
             )
     elif network_type_name == "muzero":
         if "atari" in game_name:

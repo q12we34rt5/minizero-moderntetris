@@ -19,6 +19,7 @@ extern int actor_mcts_think_batch_size;
 extern float actor_mcts_think_time_limit;
 extern bool actor_mcts_value_rescale;
 extern char actor_mcts_value_flipping_player;
+extern float actor_env_winloss_lambda;
 extern bool actor_select_action_by_count;
 extern bool actor_select_action_by_softmax_count;
 extern float actor_select_action_softmax_temperature;
@@ -127,6 +128,7 @@ extern int env_modern_tetris_garbage_max_lines;
 extern int env_modern_tetris_garbage_delay;
 extern bool env_modern_tetris_garbage_blocking;
 extern int env_modern_tetris_max_garbage_spawn;
+extern bool env_modern_tetris_two_player;
 extern int env_tetris_block_puzzle_num_holding_block;
 extern int env_tetris_block_puzzle_num_preview_holding_block;
 

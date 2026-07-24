@@ -23,6 +23,11 @@ public:
     void reset() override;
     virtual void add(float value, float weight = 1.0f);
     virtual void remove(float value, float weight = 1.0f);
+    // Two-player vector-value update: per-player env-return means (no flip) plus
+    // a single zero-sum win/loss mean (flipped at read). Also mirrors the mover's
+    // env mean into mean_ so getMean()-based consumers (e.g. the recorded V tag)
+    // see the env value. Gated by the caller (two-player placement only).
+    virtual void addTwoPlayerStats(float env_p1, float env_p2, float winloss, float weight = 1.0f);
     virtual float getNormalizedMean(const std::map<float, int>& tree_value_bound) const;
     virtual float getNormalizedPUCTScore(int total_simulation, const std::map<float, int>& tree_value_bound, float init_q_value = -1.0f) const;
     std::string toString() const override;
@@ -52,6 +57,9 @@ public:
     inline float getPolicyNoise() const { return policy_noise_; }
     inline float getValue() const { return value_; }
     inline float getReward() const { return reward_; }
+    // Two-player env-return mean for player index p (0 = kPlayer1, 1 = kPlayer2).
+    inline float getEnvMean(int p) const { return env_mean_[p]; }
+    inline float getWinLossMean() const { return winloss_mean_; }
     inline virtual MCTSNode* getChild(int index) const override { return (index < num_children_ ? static_cast<MCTSNode*>(first_child_) + index : nullptr); }
 
     // Cached env at this node, populated when the node is expanded so future
@@ -73,6 +81,8 @@ protected:
     float policy_noise_;
     float value_;
     float reward_;
+    float env_mean_[2];  // two-player: per-player env-return running means
+    float winloss_mean_; // two-player: zero-sum win/loss running mean (flipped at read)
     std::unique_ptr<Environment> env_;
 };
 
@@ -107,6 +117,12 @@ public:
     virtual std::vector<MCTSNode*> selectFromNode(MCTSNode* start_node);
     virtual void expand(MCTSNode* leaf_node, const std::vector<ActionCandidate>& action_candidates);
     virtual void backup(const std::vector<MCTSNode*>& node_path, const float value, const float reward = 0.0f);
+    // Two-player placement backup: env return backs up per-player skipping the
+    // opponent's plies (no flip); win/loss backs up zero-sum (flipped at read).
+    // env_self = network env value of the leaf's to-move player; env_opp = the
+    // other player's env value (0 until a 2-output env head supplies it);
+    // winloss = leaf win/loss in [-1, 1] from the to-move player's perspective.
+    virtual void backupTwoPlayerPlacement(const std::vector<MCTSNode*>& node_path, float env_self, float env_opp, float winloss, float leaf_reward);
 
     inline MCTSNode* allocateNodes(int size) { return static_cast<MCTSNode*>(Tree::allocateNodes(size)); }
     inline int getNumSimulation() const { return getRootNode()->getCount(); }

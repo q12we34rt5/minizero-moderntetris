@@ -95,43 +95,108 @@ void ModernTetrisPlacementEnv::reset(int seed)
     events_.clear();
     observations_.clear();
     reward_ = 0.0f;
-    total_reward_ = 0.0f;
-    reward_prev_potential_ = 0.0f; // empty board has phi = 0
+    total_reward_[0] = total_reward_[1] = 0.0f;
+    reward_prev_potential_[0] = reward_prev_potential_[1] = 0.0f; // empty board has phi = 0
     placements_dirty_ = true;
+    last_mover_ = Player::kPlayer1;
 
     engine::step::Config step_config;
     step_config.piece_life = 0x7fffffff; // effectively disable lifetime expiration
     step_config.auto_drop = 0;
-    engine::step::setConfig(&ctx_, step_config);
-    engine::step::setSeed(&ctx_, static_cast<std::uint32_t>(seed_), static_cast<std::uint32_t>(seed_ ^ 0x9e3779b9U));
-    engine::step::reset(&ctx_);
-    ctx_.state.all_spin = config::env_modern_tetris_all_spin ? 1 : 0;
-    ctx_.state.garbage_blocking = config::env_modern_tetris_garbage_blocking ? 1 : 0;
-    ctx_.state.max_garbage_spawn = static_cast<std::uint8_t>(std::clamp(config::env_modern_tetris_max_garbage_spawn, 0, 255));
+    // Each board gets its own piece/garbage RNG stream derived from the episode
+    // seed so loader replay reconstructs both boards identically. In
+    // single-player mode ctx_[1] is reset here but never played.
+    for (int b = 0; b < 2; ++b) {
+        const std::uint32_t board_salt = static_cast<std::uint32_t>(b) * 0x85ebca6bU;
+        engine::step::setConfig(&ctx_[b], step_config);
+        engine::step::setSeed(&ctx_[b],
+                              static_cast<std::uint32_t>(seed_) ^ board_salt,
+                              static_cast<std::uint32_t>(seed_ ^ 0x9e3779b9U) ^ board_salt);
+        engine::step::reset(&ctx_[b]);
+        ctx_[b].state.all_spin = config::env_modern_tetris_all_spin ? 1 : 0;
+        ctx_[b].state.garbage_blocking = config::env_modern_tetris_garbage_blocking ? 1 : 0;
+        ctx_[b].state.max_garbage_spawn = static_cast<std::uint8_t>(std::clamp(config::env_modern_tetris_max_garbage_spawn, 0, 255));
+    }
     turn_ = Player::kPlayer1;
+}
+
+int ModernTetrisPlacementEnv::getNumPlayer() const
+{
+    return config::env_modern_tetris_two_player ? 2 : 1;
+}
+
+int ModernTetrisPlacementEnv::getBoardChannels() const
+{
+    return config::env_modern_tetris_two_player ? 2 : 1;
+}
+
+float ModernTetrisPlacementEnv::getSelfPlayGameReturn(bool is_resign) const
+{
+    // Single-player: same as the eval score (accumulated env reward). Two-player:
+    // both players' summed env reward, since the win/loss eval score is
+    // structurally always +1 and thus useless as a monitoring metric.
+    if (!config::env_modern_tetris_two_player) { return getEvalScore(is_resign); }
+    return total_reward_[0] + total_reward_[1];
+}
+
+float ModernTetrisPlacementEnv::getEvalScore(bool /*is_resign*/) const
+{
+    if (!config::env_modern_tetris_two_player) { return total_reward_[0]; }
+    // Two-player win/loss from the perspective of the player to move at this
+    // (terminal) position: whoever is still alive wins, the topped-out player
+    // loses. A game that ends with both boards alive (episode-step cap) is a
+    // true DRAW (0) -- deliberately NOT decided by accumulated env reward,
+    // because a player cannot observe the opponent's score, so a score-based
+    // tiebreak would train the win/loss head on labels it cannot predict from
+    // its inputs. Both-dead (shouldn't occur in alternating play) is also a draw.
+    const int me = moverIndex();
+    const int opp = 1 - me;
+    const bool me_alive = ctx_[me].state.is_alive;
+    const bool opp_alive = ctx_[opp].state.is_alive;
+    if (me_alive == opp_alive) { return 0.0f; }
+    return me_alive ? 1.0f : -1.0f;
 }
 
 void ModernTetrisPlacementEnv::setState(const engine::step::Context& ctx)
 {
-    ctx_ = ctx;
+    // Single-board injection: set kPlayer1's board and leave kPlayer2's board
+    // reset-and-idle (empty-opponent fallback). The two-board overload below
+    // supplies a real opponent.
+    engine::step::Context opp;
+    engine::step::reset(&opp);
+    setState(ctx, opp);
+}
+
+void ModernTetrisPlacementEnv::setState(const engine::step::Context& ctx0, const engine::step::Context& ctx1)
+{
+    ctx_[0] = ctx0;
+    ctx_[1] = ctx1;
     actions_.clear();
     events_.clear();
     observations_.clear();
     reward_ = 0.0f;
-    total_reward_ = 0.0f;
+    total_reward_[0] = total_reward_[1] = 0.0f;
     placements_dirty_ = true;
+    last_mover_ = Player::kPlayer1;
     {
         using namespace minizero::env::moderntetris;
         const auto cfg = reward::RewardConfig::fromGlobals();
-        reward_prev_potential_ = reward::computeBoardPotential(ctx_.state, cfg);
+        reward_prev_potential_[0] = reward::computeBoardPotential(ctx_[0].state, cfg);
+        reward_prev_potential_[1] = reward::computeBoardPotential(ctx_[1].state, cfg);
     }
     turn_ = Player::kPlayer1;
 }
 
 bool ModernTetrisPlacementEnv::act(const ModernTetrisPlacementAction& action, bool with_chance /* = true */)
 {
-    if (turn_ != Player::kPlayer1 || action.getPlayer() != Player::kPlayer1) { return false; }
+    // The mover is the player whose turn it is; single-player mode keeps turn_
+    // pinned to kPlayer1 (moverIndex 0), two-player mode alternates.
+    if (turn_ == Player::kPlayerNone || action.getPlayer() != turn_) { return false; }
     if (action.getActionID() < 0 || action.getActionID() >= kMaxPlacementActionId) { return false; }
+
+    const int mi = moverIndex();
+    engine::step::Context& me = ctx_[mi];
+    engine::step::Context& opp = ctx_[1 - mi];
 
     rebuildLegalPlacements();
     const CachedPlacement* found = nullptr;
@@ -143,26 +208,39 @@ bool ModernTetrisPlacementEnv::act(const ModernTetrisPlacementAction& action, bo
     }
     if (!found) { return false; }
 
-    // replay path through engine
+    // replay path through engine (on the mover's own board)
     if (unpackPlacementId(action.getActionID()).use_hold) {
-        engine::step::step(&ctx_, engine::step::Action::HOLD);
+        engine::step::step(&me, engine::step::Action::HOLD);
     }
     for (const auto& pa : found->result.path) {
-        engine::step::step(&ctx_, placementActionToStepAction(pa));
+        engine::step::step(&me, placementActionToStepAction(pa));
     }
     // Capture the piece type + lock y before hard-drop advances state.current
     // and overwrites state.y. lock_y is the piece's settled y (top-left of its
     // 4x4 bbox) — used to index depth-keyed reward terms.
-    const engine::PieceType locked_piece = ctx_.state.current;
+    const engine::PieceType locked_piece = me.state.current;
     const int locked_y = static_cast<int>(found->result.lock_y);
-    engine::step::step(&ctx_, engine::step::Action::HARD_DROP);
+    engine::step::step(&me, engine::step::Action::HARD_DROP);
 
-    // Inject random garbage after the hard-drop so the current piece's attack
-    // only counters pre-existing queue entries (new garbage waits until the
-    // next placement's processGarbageAndCounterAttack). Deterministic from the
-    // state's garbage_seed stream -- loader replay reconstructs it identically.
-    if (config::env_modern_tetris_garbage_probability > 0.0f && ctx_.state.is_alive) {
-        auto& seed = ctx_.state.garbage_seed;
+    if (config::env_modern_tetris_two_player) {
+        // Real attack routing: the mover's net attack (lines_sent, already
+        // reduced by processGarbageAndCounterAttack cancelling its own incoming
+        // queue during the hard-drop above) becomes the opponent's pending
+        // garbage. addGarbage only enqueues -- it lands on the opponent's board
+        // during THEIR next placement, subject to garbage_delay.
+        const int net_attack = static_cast<int>(me.state.lines_sent);
+        if (net_attack > 0 && opp.state.is_alive) {
+            const int delay = std::max(0, config::env_modern_tetris_garbage_delay);
+            engine::addGarbage(&opp.state,
+                               static_cast<std::uint8_t>(std::min(net_attack, 255)),
+                               static_cast<std::uint8_t>(std::min(delay, 255)));
+        }
+    } else if (config::env_modern_tetris_garbage_probability > 0.0f && me.state.is_alive) {
+        // Single-player "phantom opponent": inject random garbage after the
+        // hard-drop so the current piece's attack only counters pre-existing
+        // queue entries. Deterministic from the state's garbage_seed stream --
+        // loader replay reconstructs it identically.
+        auto& seed = me.state.garbage_seed;
         const float u = static_cast<float>(xorshift32(seed)) / static_cast<float>(std::numeric_limits<std::uint32_t>::max());
         if (u < config::env_modern_tetris_garbage_probability) {
             const int lo = std::max(1, config::env_modern_tetris_garbage_min_lines);
@@ -170,7 +248,7 @@ bool ModernTetrisPlacementEnv::act(const ModernTetrisPlacementAction& action, bo
             const std::uint32_t range = static_cast<std::uint32_t>(hi - lo + 1);
             const int lines = lo + static_cast<int>(xorshift32(seed) % range);
             const int delay = std::max(0, config::env_modern_tetris_garbage_delay);
-            engine::addGarbage(&ctx_.state,
+            engine::addGarbage(&me.state,
                                static_cast<std::uint8_t>(std::min(lines, 255)),
                                static_cast<std::uint8_t>(std::min(delay, 255)));
         }
@@ -182,13 +260,14 @@ bool ModernTetrisPlacementEnv::act(const ModernTetrisPlacementAction& action, bo
     {
         using namespace minizero::env::moderntetris;
         const auto cfg = reward::RewardConfig::fromGlobals();
-        const bool just_died = !ctx_.state.is_alive;
-        float base = reward::computeLockBaseReward(ctx_.state, locked_piece, locked_y, just_died, cfg);
-        float phi_new = reward::computeBoardPotential(ctx_.state, cfg);
-        reward_ = base + (phi_new - reward_prev_potential_);
-        reward_prev_potential_ = phi_new;
+        const bool just_died = !me.state.is_alive;
+        float base = reward::computeLockBaseReward(me.state, locked_piece, locked_y, just_died, cfg);
+        float phi_new = reward::computeBoardPotential(me.state, cfg);
+        reward_ = base + (phi_new - reward_prev_potential_[mi]);
+        reward_prev_potential_[mi] = phi_new;
     }
-    total_reward_ += reward_;
+    total_reward_[mi] += reward_;
+    last_mover_ = turn_;
     turn_ = Player::kPlayerNone;
     if (with_chance) { return actChanceEvent(); }
     return true;
@@ -198,7 +277,9 @@ bool ModernTetrisPlacementEnv::actChanceEvent(const ModernTetrisPlacementAction&
 {
     if (turn_ != Player::kPlayerNone || action.getActionID() != kPlacementChanceEventId || action.getPlayer() != Player::kPlayerNone) { return false; }
     events_.push_back(action);
-    turn_ = Player::kPlayer1;
+    // Hand the turn to the next mover: the other player in two-player mode,
+    // kPlayer1 again in single-player mode.
+    turn_ = config::env_modern_tetris_two_player ? getNextPlayer(last_mover_, 2) : Player::kPlayer1;
     return true;
 }
 
@@ -206,7 +287,7 @@ bool ModernTetrisPlacementEnv::actChanceEvent()
 {
     if (turn_ != Player::kPlayerNone) { return false; }
     events_.emplace_back(kPlacementChanceEventId, Player::kPlayerNone);
-    turn_ = Player::kPlayer1;
+    turn_ = config::env_modern_tetris_two_player ? getNextPlayer(last_mover_, 2) : Player::kPlayer1;
     return true;
 }
 
@@ -261,15 +342,18 @@ void ModernTetrisPlacementEnv::rebuildLegalPlacements() const
         }
     };
 
+    // Placements are always computed on the board of the player to move.
+    const engine::State& mover_state = moverCtx().state;
+
     // non-hold placements
-    auto placements = engine::findPlacements(ctx_.state);
-    addPlacements(ctx_.state.current, false, placements);
+    auto placements = engine::findPlacements(mover_state);
+    addPlacements(mover_state.current, false, placements);
 
     // hold placements (only if not already held this turn)
-    if (!ctx_.state.has_held) {
-        engine::State hold_state = ctx_.state;
+    if (!mover_state.has_held) {
+        engine::State hold_state = mover_state;
         engine::hold(&hold_state);
-        if (hold_state.current != ctx_.state.current || ctx_.state.hold != engine::PieceType::NONE) {
+        if (hold_state.current != mover_state.current || mover_state.hold != engine::PieceType::NONE) {
             auto hold_placements = engine::findPlacements(hold_state);
             addPlacements(hold_state.current, true, hold_placements);
         }
@@ -280,13 +364,13 @@ void ModernTetrisPlacementEnv::rebuildLegalPlacements() const
 
 std::vector<ModernTetrisPlacementAction> ModernTetrisPlacementEnv::getLegalActions() const
 {
-    if (turn_ != Player::kPlayer1 || isTerminal()) { return {}; }
+    if (turn_ == Player::kPlayerNone || isTerminal()) { return {}; }
 
     rebuildLegalPlacements();
     std::vector<ModernTetrisPlacementAction> legal_actions;
     legal_actions.reserve(cached_placements_.size());
     for (const auto& cp : cached_placements_) {
-        legal_actions.emplace_back(cp.action_id, Player::kPlayer1);
+        legal_actions.emplace_back(cp.action_id, turn_);
     }
     return legal_actions;
 }
@@ -304,7 +388,7 @@ float ModernTetrisPlacementEnv::getChanceEventProbability(const ModernTetrisPlac
 
 bool ModernTetrisPlacementEnv::isLegalAction(const ModernTetrisPlacementAction& action) const
 {
-    if (turn_ != Player::kPlayer1 || isTerminal()) { return false; }
+    if (turn_ == Player::kPlayerNone || action.getPlayer() != turn_ || isTerminal()) { return false; }
     rebuildLegalPlacements();
     for (const auto& cp : cached_placements_) {
         if (cp.action_id == action.getActionID()) { return true; }
@@ -319,7 +403,11 @@ bool ModernTetrisPlacementEnv::isLegalChanceEvent(const ModernTetrisPlacementAct
 
 bool ModernTetrisPlacementEnv::isTerminal() const
 {
-    return !ctx_.state.is_alive || static_cast<int>(actions_.size()) >= std::max(1, config::env_modern_tetris_max_episode_steps);
+    // Either board topping out ends the game. In single-player mode ctx_[1]
+    // stays alive-and-idle, so its check is inert.
+    if (!ctx_[0].state.is_alive) { return true; }
+    if (config::env_modern_tetris_two_player && !ctx_[1].state.is_alive) { return true; }
+    return static_cast<int>(actions_.size()) >= std::max(1, config::env_modern_tetris_max_episode_steps);
 }
 
 // --- Features ---
@@ -348,13 +436,29 @@ std::vector<float> ModernTetrisPlacementEnv::getChanceEventFeatures(const Modern
 
 int ModernTetrisPlacementEnv::getNumInputChannels() const
 {
-    return kPlacementBoardChannels;
+    return getBoardChannels();
 }
 
 std::string ModernTetrisPlacementEnv::toString() const
 {
+    if (config::env_modern_tetris_two_player) {
+        std::array<char, 4096> buf0{}, buf1{};
+        engine::State s0 = ctx_[0].state;
+        engine::State s1 = ctx_[1].state;
+        engine::toString(&s0, buf0.data(), buf0.size());
+        engine::toString(&s1, buf1.data(), buf1.size());
+        std::ostringstream oss;
+        const char* mark0 = (turn_ == Player::kPlayer1) ? " (to move)" : "";
+        const char* mark1 = (turn_ == Player::kPlayer2) ? " (to move)" : "";
+        oss << "=== Player 1" << mark0 << " ===\n"
+            << buf0.data()
+            << "\n=== Player 2" << mark1 << " ===\n"
+            << buf1.data();
+        return oss.str();
+    }
+
     std::array<char, 4096> buffer{};
-    engine::State state = ctx_.state;
+    engine::State state = ctx_[0].state;
     engine::toString(&state, buffer.data(), buffer.size());
 
     std::string result(buffer.data());
@@ -373,38 +477,47 @@ std::string ModernTetrisPlacementEnv::toString() const
 
 std::vector<float> ModernTetrisPlacementEnv::getBoardFeatures() const
 {
-    std::vector<float> features(kPlacementBoardChannels * kVisibleCellCount, 0.0f);
-    for (int y = engine::BOARD_TOP; y <= engine::BOARD_BOTTOM; ++y) {
-        for (int x = engine::BOARD_LEFT; x <= engine::BOARD_RIGHT; ++x) {
-            if (!isOccupied(engine::ops::getCell(ctx_.state.board, x, y))) { continue; }
-            const int local_x = x - engine::BOARD_LEFT;
-            const int local_y = y - engine::BOARD_TOP;
-            features[local_y * kModernTetrisPlacementBoardWidth + local_x] = 1.0f;
+    const int channels = getBoardChannels();
+    std::vector<float> features(channels * kVisibleCellCount, 0.0f);
+    // Channel 0 = the player to move; channel 1 (two-player only) = the
+    // opponent's board, so the network can see what it is attacking into.
+    const auto fillChannel = [&](int channel, const engine::State& state) {
+        float* plane = features.data() + channel * kVisibleCellCount;
+        for (int y = engine::BOARD_TOP; y <= engine::BOARD_BOTTOM; ++y) {
+            for (int x = engine::BOARD_LEFT; x <= engine::BOARD_RIGHT; ++x) {
+                if (!isOccupied(engine::ops::getCell(state.board, x, y))) { continue; }
+                const int local_x = x - engine::BOARD_LEFT;
+                const int local_y = y - engine::BOARD_TOP;
+                plane[local_y * kModernTetrisPlacementBoardWidth + local_x] = 1.0f;
+            }
         }
-    }
+    };
+    fillChannel(0, moverCtx().state);
+    if (channels > 1) { fillChannel(1, oppCtx().state); }
     return features;
 }
 
 PlacementGlobalFeatures ModernTetrisPlacementEnv::getGlobalFeatures() const
 {
     const int preview_size = std::clamp(config::env_modern_tetris_num_preview_piece, 0, 14);
+    const engine::State& state = moverCtx().state;
     PlacementGlobalFeatures g;
-    const int cur_idx = toPieceIndex(ctx_.state.current);
+    const int cur_idx = toPieceIndex(state.current);
     g.current_piece = (cur_idx >= 0 && cur_idx < 7) ? cur_idx : -1;
-    const int hold_idx = toPieceIndex(ctx_.state.hold);
+    const int hold_idx = toPieceIndex(state.hold);
     g.hold_piece = (hold_idx >= 0 && hold_idx < 7) ? hold_idx : -1;
-    g.has_held = ctx_.state.has_held;
+    g.has_held = state.has_held;
     g.preview.reserve(preview_size);
     for (int i = 0; i < preview_size; ++i) {
-        const int p = toPieceIndex(ctx_.state.next[i]);
+        const int p = toPieceIndex(state.next[i]);
         g.preview.push_back((p >= 0 && p < 7) ? p : -1);
     }
-    g.was_rotation = ctx_.state.was_last_rotation;
-    g.srs_index = static_cast<int>(ctx_.state.srs_index);
-    g.combo_count = ctx_.state.combo_count;
-    g.back_to_back = ctx_.state.back_to_back_count > 0;
+    g.was_rotation = state.was_last_rotation;
+    g.srs_index = static_cast<int>(state.srs_index);
+    g.combo_count = state.combo_count;
+    g.back_to_back = state.back_to_back_count > 0;
     int pending_garbage = 0;
-    for (int i = 0; i < engine::GARBAGE_QUEUE_SIZE; ++i) { pending_garbage += ctx_.state.garbage_queue[i]; }
+    for (int i = 0; i < engine::GARBAGE_QUEUE_SIZE; ++i) { pending_garbage += state.garbage_queue[i]; }
     g.pending_garbage = pending_garbage;
     return g;
 }
@@ -412,6 +525,7 @@ PlacementGlobalFeatures ModernTetrisPlacementEnv::getGlobalFeatures() const
 std::vector<PlacementActionDescriptor> ModernTetrisPlacementEnv::getActionDescriptors() const
 {
     rebuildLegalPlacements();
+    const engine::State& state = moverCtx().state;
     std::vector<PlacementActionDescriptor> descs;
     descs.reserve(cached_placements_.size());
     for (const auto& cp : cached_placements_) {
@@ -428,11 +542,11 @@ std::vector<PlacementActionDescriptor> ModernTetrisPlacementEnv::getActionDescri
         // if hold exists else preview[0].
         engine::PieceType piece_type;
         if (!unpacked.use_hold) {
-            piece_type = ctx_.state.current;
-        } else if (ctx_.state.hold != engine::PieceType::NONE) {
-            piece_type = ctx_.state.hold;
+            piece_type = state.current;
+        } else if (state.hold != engine::PieceType::NONE) {
+            piece_type = state.hold;
         } else {
-            piece_type = ctx_.state.next[0];
+            piece_type = state.next[0];
         }
         const int pt_idx = toPieceIndex(piece_type);
         d.piece_type = (pt_idx >= 0 && pt_idx < 7) ? pt_idx : 0;
@@ -497,13 +611,50 @@ float ModernTetrisPlacementEnvLoader::calculateNStepValue(const int pos) const
 
     const int n_step = config::learner_n_step_return;
     const float discount = config::actor_mcts_reward_discount;
-    const size_t bootstrap_index = pos + n_step;
+    // Positions strictly alternate P1/P2 in two-player mode, so a player's own
+    // env-return "skips the opponent layer": accumulate the mover's rewards at
+    // pos, pos+2, pos+4, ... and bootstrap 2*n_step ahead (still the same
+    // player's position). stride == 1 in single-player reproduces the original.
+    const int stride = config::env_modern_tetris_two_player ? 2 : 1;
+    const size_t bootstrap_index = pos + static_cast<size_t>(n_step) * stride;
     float value = 0.0f;
-    const float n_step_value = (bootstrap_index < action_pairs_.size()) ? std::pow(discount, n_step) * BaseEnvLoader::getValue(bootstrap_index)[0] : 0.0f;
-    for (size_t index = pos; index < std::min(bootstrap_index, action_pairs_.size()); ++index) {
-        value += std::pow(discount, index - pos) * BaseEnvLoader::getReward(index)[0];
+    const float n_step_value = (bootstrap_index < action_pairs_.size())
+                                   ? std::pow(discount, n_step) * BaseEnvLoader::getValue(bootstrap_index)[0]
+                                   : 0.0f;
+    for (int k = 0; k < n_step; ++k) {
+        const size_t index = pos + static_cast<size_t>(k) * stride;
+        if (index >= action_pairs_.size()) { break; }
+        value += std::pow(discount, k) * BaseEnvLoader::getReward(index)[0];
     }
     return value + n_step_value;
+}
+
+std::vector<float> ModernTetrisPlacementEnvLoader::getWinLossValue(const int pos) const
+{
+    // One-hot over {lose (idx0, -1), draw (idx1, 0), win (idx2, +1)}.
+    std::vector<float> v(3, 0.0f);
+    if (action_pairs_.empty() || pos < 0 || pos >= static_cast<int>(action_pairs_.size())) {
+        v[1] = 1.0f; // treat out-of-range as a draw target
+        return v;
+    }
+    float re = 0.0f;
+    const std::string re_tag = getTag("RE");
+    if (!re_tag.empty()) {
+        try {
+            re = std::stof(re_tag);
+        } catch (...) {
+            re = 0.0f;
+        }
+    }
+    // RE is stored from the final to-move player's perspective, which is the
+    // survivor (the loser made the last placement, then the turn passed). So the
+    // absolute winner is the player who did NOT make the last placement.
+    const Player final_to_move = getNextPlayer(action_pairs_.back().first.getPlayer(), 2);
+    const Player mover = action_pairs_[pos].first.getPlayer();
+    const float wl = (mover == final_to_move) ? re : -re;
+    const int idx = (wl > 0.5f) ? 2 : (wl < -0.5f ? 0 : 1);
+    v[idx] = 1.0f;
+    return v;
 }
 
 std::vector<float> ModernTetrisPlacementEnvLoader::toDiscreteValue(float value) const

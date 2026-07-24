@@ -17,6 +17,7 @@ int actor_mcts_think_batch_size = 1;
 float actor_mcts_think_time_limit = 0;
 bool actor_mcts_value_rescale = false;
 char actor_mcts_value_flipping_player = 'W';
+float actor_env_winloss_lambda = 1.0f;
 bool actor_select_action_by_count = false;
 bool actor_select_action_by_softmax_count = true;
 float actor_select_action_softmax_temperature = 1.0f;
@@ -127,6 +128,7 @@ int env_modern_tetris_garbage_max_lines = 4;
 int env_modern_tetris_garbage_delay = 8;
 bool env_modern_tetris_garbage_blocking = true;
 int env_modern_tetris_max_garbage_spawn = 6;
+bool env_modern_tetris_two_player = false;
 int env_tetris_block_puzzle_num_holding_block = 3;
 int env_tetris_block_puzzle_num_preview_holding_block = 0;
 
@@ -143,6 +145,7 @@ void setConfiguration(ConfigureLoader& cl)
     cl.addParameter("actor_mcts_puct_init", actor_mcts_puct_init, "hyperparameter for puct_bias in the PUCT formula of MCTS", "Actor");                                       // ref: AZ, Sec. Methods
     cl.addParameter("actor_mcts_reward_discount", actor_mcts_reward_discount, "discount factor for calculating Q values", "Actor");                                           // ref: MZ, Sec. Methods
     cl.addParameter("actor_mcts_value_rescale", actor_mcts_value_rescale, "true for games whose rewards are not bounded in [-1, 1], e.g., Atari games", "Actor");             // ref: MZ
+    cl.addParameter("actor_env_winloss_lambda", actor_env_winloss_lambda, "two-player scalarization weight for PUCT: Q = normalized_env_Q + lambda * winloss_Q", "Actor");
     cl.addParameter("actor_mcts_think_batch_size", actor_mcts_think_batch_size, "the MCTS selection batch size; only works when running console", "Actor");
     cl.addParameter("actor_mcts_think_time_limit", actor_mcts_think_time_limit, "the MCTS time limit in seconds, 0 represents disabling time limit (only uses actor_num_simulation); only works when running console", "Actor");
     cl.addParameter("actor_select_action_by_count", actor_select_action_by_count, "true for selecting the action by the maximum MCTS count; should not be true together with actor_select_action_by_softmax_count", "Actor");
@@ -278,6 +281,7 @@ void setConfiguration(ConfigureLoader& cl)
     cl.addParameter("env_modern_tetris_garbage_delay", env_modern_tetris_garbage_delay, "queue delay (in hard-drop steps) before injected garbage is applied to the board; note delays 0 and 1 are equivalent due to decrement-before-apply in the engine", "Environment");
     cl.addParameter("env_modern_tetris_garbage_blocking", env_modern_tetris_garbage_blocking, "true if a line clear temporarily blocks pending garbage from being applied on that lock", "Environment");
     cl.addParameter("env_modern_tetris_max_garbage_spawn", env_modern_tetris_max_garbage_spawn, "maximum garbage lines applied to the board in a single placement", "Environment");
+    cl.addParameter("env_modern_tetris_two_player", env_modern_tetris_two_player, "true to enable the two-player adversarial ruleset: two boards, alternating placements, and real garbage attack routing between players", "Environment");
 #endif
 
     // references

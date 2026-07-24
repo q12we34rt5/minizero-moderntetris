@@ -32,7 +32,7 @@ void ThreadSharedData::outputGame(const std::shared_ptr<BaseActor>& actor)
         << (is_terminal ? "true" : "false") << " "                                                                         // is terminal
         << (data_range.second - data_range.first + 1) << " "                                                               // data length
         << game_length << " "                                                                                              // game length
-        << actor->getEnvironment().getEvalScore(!actor->isEnvTerminal()) << " "                                            // return
+        << actor->getEnvironment().getSelfPlayGameReturn(!actor->isEnvTerminal()) << " "                                   // return
         << actor->getRecord({{"DLEN", std::to_string(data_range.first) + "-" + std::to_string(data_range.second)}}) << " " // game record
         << "#";                                                                                                            // end mark for a valid game
 

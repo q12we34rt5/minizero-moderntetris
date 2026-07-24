@@ -84,6 +84,12 @@ public:
     virtual bool isTerminal() const = 0;
     virtual float getReward() const = 0;
     virtual float getEvalScore(bool is_resign = false) const = 0;
+    // Value reported as the per-game "return" in self-play logs (feeds the
+    // [SelfPlay ... Game Returns] stats only, not training). Defaults to
+    // getEvalScore; envs whose eval score is uninformative for monitoring (e.g.
+    // two-player tetris, where it is structurally always +1) can override this
+    // to report something meaningful instead.
+    virtual float getSelfPlayGameReturn(bool is_resign = false) const { return getEvalScore(is_resign); }
     virtual std::vector<float> getFeatures(utils::Rotation rotation = utils::Rotation::kRotationNone) const = 0;
     virtual std::vector<float> getActionFeatures(const Action& action, utils::Rotation rotation = utils::Rotation::kRotationNone) const = 0;
     virtual int getNumInputChannels() const = 0;

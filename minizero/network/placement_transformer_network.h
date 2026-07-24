@@ -96,13 +96,15 @@ inline PlacementNetworkInput buildPlacementNetworkInput(const Env& env,
 
 class PlacementNetworkOutput : public NetworkOutput {
 public:
-    float value_;
+    float value_;                      // env value (expected accumulated score)
+    float winloss_value_;              // two-player win/loss in [-1, 1]; 0 when the head is absent
     std::vector<float> policy_;        // size N (legal placements)
     std::vector<float> policy_logits_; // size N
 
     explicit PlacementNetworkOutput(int n)
     {
         value_ = 0.0f;
+        winloss_value_ = 0.0f;
         policy_.resize(n, 0.0f);
         policy_logits_.resize(n, 0.0f);
     }
@@ -130,6 +132,12 @@ public:
         game_name_ = network_.get_method("get_game_name")(dummy).toString()->string();
         network_type_name_ = network_.get_method("get_type_name")(dummy).toString()->string();
         discrete_value_size_ = network_.get_method("get_discrete_value_size")(dummy).toInt();
+        // Two-player models expose a win/loss head; single-player models (and
+        // older checkpoints) do not, so probe for the method rather than assume.
+        winloss_value_size_ = 0;
+        if (network_.find_method("get_winloss_value_size")) {
+            winloss_value_size_ = network_.get_method("get_winloss_value_size")(dummy).toInt();
+        }
         // Placement action space is variable N per state. These fields must not be
         // -1 because callers multiply them into tree-sizing arithmetic (overflow ->
         // bad_alloc). Set to safe upper bounds.
@@ -292,6 +300,13 @@ public:
         auto value_output = result.at("value").toTensor().to(at::kCPU).contiguous();
         assert(policy_output.size(0) == B && policy_output.size(1) == n_max);
 
+        // Win/loss head (two-player): a distribution over winloss_value_size
+        // classes centered on 0, i.e. {-(K-1)/2, ..., 0, ..., (K-1)/2} scaled so
+        // the extremes are +/-1. For K=3 the support is {-1, 0, +1}.
+        const bool has_winloss = winloss_value_size_ > 0 && result.contains("winloss");
+        at::Tensor winloss_output;
+        if (has_winloss) { winloss_output = result.at("winloss").toTensor().to(at::kCPU).contiguous(); }
+
         std::vector<std::shared_ptr<NetworkOutput>> outputs;
         outputs.reserve(B);
         for (int i = 0; i < B; ++i) {
@@ -313,6 +328,19 @@ public:
                 }
                 out->value_ = utils::invertValue(v);
             }
+
+            if (has_winloss) {
+                // Expected win/loss = sum_k p_k * support_k, support linearly
+                // spaced in [-1, 1]. For K=3: support = {-1, 0, +1}.
+                const float* wrow = winloss_output.data_ptr<float>() + i * winloss_value_size_;
+                const float denom = (winloss_value_size_ > 1) ? static_cast<float>(winloss_value_size_ - 1) : 1.0f;
+                float wl = 0.0f;
+                for (int k = 0; k < winloss_value_size_; ++k) {
+                    const float support = -1.0f + 2.0f * static_cast<float>(k) / denom;
+                    wl += wrow[k] * support;
+                }
+                out->winloss_value_ = wl;
+            }
             outputs.push_back(std::move(out));
         }
 
@@ -331,6 +359,7 @@ protected:
     }
 
     int batch_size_ = 0;
+    int winloss_value_size_ = 0; // 0 = no win/loss head (single-player)
     std::mutex mutex_;
     std::vector<PlacementNetworkInput> batch_inputs_;
 

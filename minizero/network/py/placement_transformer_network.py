@@ -202,7 +202,8 @@ class PlacementTransformerNetwork(nn.Module):
                  mlp_ratio: int = 4,
                  dropout: float = 0.1,
                  num_value_hidden_channels: int = 256,
-                 discrete_value_size: int = 601):
+                 discrete_value_size: int = 601,
+                 winloss_value_size: int = 0):
         super().__init__()
         self.game_name = game_name
         self.board_channels = board_channels
@@ -215,6 +216,9 @@ class PlacementTransformerNetwork(nn.Module):
         self.n_heads = n_heads
         self.n_layers = n_layers
         self.discrete_value_size = discrete_value_size
+        # Two-player mode adds a separate zero-sum win/loss head (distributional
+        # over {lose, draw, win}); 0 disables it (single-player).
+        self.winloss_value_size = winloss_value_size
 
         self.patch_embed = BoardPatchEmbed(board_channels, board_height, board_width,
                                            patch_size, d_model)
@@ -262,9 +266,26 @@ class PlacementTransformerNetwork(nn.Module):
                 nn.Linear(num_value_hidden_channels, discrete_value_size),
             )
 
+        # Win/loss head (two-player only): distributional over winloss_value_size
+        # classes (typically 3 = {lose, draw, win}) on the same VALUE token. The
+        # module is always constructed (TorchScript needs a concrete submodule),
+        # but its output is only emitted when winloss_value_size > 0; in
+        # single-player it is an unused, untrained head.
+        self._winloss_built_size = winloss_value_size if winloss_value_size > 0 else 3
+        self.winloss_head = nn.Sequential(
+            nn.LayerNorm(d_model),
+            nn.Linear(d_model, num_value_hidden_channels),
+            nn.GELU(),
+            nn.Linear(num_value_hidden_channels, self._winloss_built_size),
+        )
+
     @torch.jit.export
     def get_type_name(self) -> str:
         return "placement_transformer"
+
+    @torch.jit.export
+    def get_winloss_value_size(self) -> int:
+        return self.winloss_value_size
 
     @torch.jit.export
     def get_game_name(self) -> str:
@@ -346,16 +367,22 @@ class PlacementTransformerNetwork(nn.Module):
 
         if self.discrete_value_size == 1:
             value = self.value_head(h_value).squeeze(-1)                              # [B]
-            return {"policy_logit": policy_logit,
-                    "policy": policy,
-                    "value": value}
+            out = {"policy_logit": policy_logit,
+                   "policy": policy,
+                   "value": value}
         else:
             value_logit = self.value_head(h_value)                                    # [B, V]
             value = torch.softmax(value_logit, dim=1)
-            return {"policy_logit": policy_logit,
-                    "policy": policy,
-                    "value_logit": value_logit,
-                    "value": value}
+            out = {"policy_logit": policy_logit,
+                   "policy": policy,
+                   "value_logit": value_logit,
+                   "value": value}
+
+        if self.winloss_value_size > 0:
+            winloss_logit = self.winloss_head(h_value)                                # [B, Vw]
+            out["winloss_logit"] = winloss_logit
+            out["winloss"] = torch.softmax(winloss_logit, dim=1)
+        return out
 
 
 def _smoke_test():

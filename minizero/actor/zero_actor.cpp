@@ -67,7 +67,7 @@ void ZeroActor::beforeNNEvaluation()
         feature_rotation_ = utils::Rotation::kRotationNone;
         using namespace minizero::env::moderntetris_placement;
         auto in = network::buildPlacementNetworkInput(
-            env_transition, kPlacementBoardChannels,
+            env_transition, env_transition.getBoardChannels(),
             kModernTetrisPlacementBoardHeight, kModernTetrisPlacementBoardWidth);
         nn_evaluation_batch_id_ = placement_network_->pushBack(std::move(in));
 #endif
@@ -109,9 +109,19 @@ void ZeroActor::afterNNEvaluation(const std::shared_ptr<NetworkOutput>& network_
         if (!env_transition.isTerminal()) {
             auto placement_output = std::static_pointer_cast<PlacementNetworkOutput>(network_output);
             getMCTS()->expand(leaf_node, calculatePlacementActionPolicy(env_transition, placement_output));
-            getMCTS()->backup(node_path, placement_output->value_, env_transition.getReward());
+            if (config::env_modern_tetris_two_player) {
+                // env_opp = 0 until a two-output env head supplies the opponent's return.
+                getMCTS()->backupTwoPlayerPlacement(node_path, placement_output->value_, 0.0f, placement_output->winloss_value_, env_transition.getReward());
+            } else {
+                getMCTS()->backup(node_path, placement_output->value_, env_transition.getReward());
+            }
         } else {
-            getMCTS()->backup(node_path, env_transition.getEvalScore(), env_transition.getReward());
+            if (config::env_modern_tetris_two_player) {
+                // Terminal: no future env return; win/loss = eval score (to-move perspective, +/-1).
+                getMCTS()->backupTwoPlayerPlacement(node_path, 0.0f, 0.0f, env_transition.getEvalScore(), env_transition.getReward());
+            } else {
+                getMCTS()->backup(node_path, env_transition.getEvalScore(), env_transition.getReward());
+            }
         }
 #endif
     } else if (muzero_network_) {

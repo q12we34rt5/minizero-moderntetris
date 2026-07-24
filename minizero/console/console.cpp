@@ -36,6 +36,7 @@ Console::Console()
     RegisterFunction("genmove", this, &Console::cmdGenmove);
     RegisterFunction("reg_genmove", this, &Console::cmdGenmove);
     RegisterFunction("set_state", this, &Console::cmdSetState);
+    RegisterFunction("get_ai_info", this, &Console::cmdGetAiInfo);
     RegisterFunction("final_score", this, &Console::cmdFinalScore);
     RegisterFunction("pv", this, &Console::cmdPV);
     RegisterFunction("pv_string", this, &Console::cmdPVString);
@@ -74,7 +75,7 @@ void Console::initialize()
         for (int i = 0; i < num_warmup_forward; ++i) {
             for (int j = 0; j < config::actor_mcts_think_batch_size; ++j) {
                 placement_network->pushBack(network::buildPlacementNetworkInput(
-                    actor_->getEnvironment(), kPlacementBoardChannels,
+                    actor_->getEnvironment(), actor_->getEnvironment().getBoardChannels(),
                     kModernTetrisPlacementBoardHeight, kModernTetrisPlacementBoardWidth));
             }
             placement_network->forward();
@@ -191,25 +192,71 @@ void Console::cmdSetState(const std::vector<std::string>& args)
 {
 #if MODERNTETRIS_PLACEMENT
     namespace codec = minizero::env::moderntetris::engine::codec;
-    // args: "set_state" followed by exactly STATE_CODEC_SIZE signed int32 values
-    // (the flat serialization produced by codec::serialize / the WASM frontend).
-    if (!checkArgument(args, 1 + codec::STATE_CODEC_SIZE, 1 + codec::STATE_CODEC_SIZE)) { return; }
-    std::vector<std::int32_t> buf(codec::STATE_CODEC_SIZE);
+    // args: "set_state" followed by either ONE board block (STATE_CODEC_SIZE
+    // int32s -> opponent defaults to empty) or TWO board blocks
+    // (2 * STATE_CODEC_SIZE -> [mover board, opponent board]) for two-player
+    // inference. Both are the flat serialization from codec::serialize / the
+    // WASM frontend.
+    const int one = 1 + codec::STATE_CODEC_SIZE;
+    const int two = 1 + 2 * codec::STATE_CODEC_SIZE;
+    const int nargs = static_cast<int>(args.size());
+    if (nargs != one && nargs != two) {
+        return reply(ConsoleResponse::kFail, "set_state: expected STATE_CODEC_SIZE (1 board) or 2*STATE_CODEC_SIZE (2 boards) integer values");
+    }
+    const int num_boards = (nargs == two) ? 2 : 1;
+    std::vector<std::int32_t> buf(static_cast<std::size_t>(num_boards) * codec::STATE_CODEC_SIZE);
     try {
-        for (int i = 0; i < codec::STATE_CODEC_SIZE; ++i) {
+        for (std::size_t i = 0; i < buf.size(); ++i) {
             buf[i] = static_cast<std::int32_t>(std::stoll(args[i + 1]));
         }
     } catch (const std::exception&) {
         return reply(ConsoleResponse::kFail, "set_state: non-integer argument");
     }
-    minizero::env::moderntetris::engine::step::Context ctx;
-    codec::deserialize(buf.data(), ctx);
-    actor_->getEnvironment().setState(ctx);
+    minizero::env::moderntetris::engine::step::Context ctx0;
+    codec::deserialize(buf.data(), ctx0);
+    if (num_boards == 2) {
+        minizero::env::moderntetris::engine::step::Context ctx1;
+        codec::deserialize(buf.data() + codec::STATE_CODEC_SIZE, ctx1);
+        actor_->getEnvironment().setState(ctx0, ctx1);
+    } else {
+        actor_->getEnvironment().setState(ctx0);
+    }
     actor_->resetSearch();
     reply(ConsoleResponse::kSuccess, "");
 #else
     (void)args;
     reply(ConsoleResponse::kFail, "set_state is only supported in moderntetris_placement builds");
+#endif
+}
+
+void Console::cmdGetAiInfo(const std::vector<std::string>& args)
+{
+    // Returns extra AI info about the CURRENT state as a space-separated list of
+    // key=value pairs (a general, extensible channel the frontend renders as-is).
+    // A single network forward on the current position, so it reflects the board
+    // just injected via set_state. Currently: value (env value head) and, in
+    // two-player mode, winloss (win/loss head, in [-1, 1] from the mover's view).
+    if (!checkArgument(args, 1, 1)) { return; }
+#if MODERNTETRIS_PLACEMENT
+    using namespace minizero::env::moderntetris_placement;
+    if (!network_ || network_->getNetworkTypeName() != "placement_transformer") {
+        return reply(ConsoleResponse::kSuccess, "");
+    }
+    auto placement_network = std::static_pointer_cast<network::PlacementTransformerNetwork>(network_);
+    int index = placement_network->pushBack(network::buildPlacementNetworkInput(
+        actor_->getEnvironment(), actor_->getEnvironment().getBoardChannels(),
+        kModernTetrisPlacementBoardHeight, kModernTetrisPlacementBoardWidth));
+    auto network_output = placement_network->forward()[index];
+    auto out = std::static_pointer_cast<network::PlacementNetworkOutput>(network_output);
+    std::ostringstream oss;
+    oss << "value=" << out->value_;
+    if (config::env_modern_tetris_two_player) {
+        oss << " winloss=" << out->winloss_value_;
+    }
+    reply(ConsoleResponse::kSuccess, oss.str());
+#else
+    (void)args;
+    reply(ConsoleResponse::kSuccess, "");
 #endif
 }
 
@@ -335,7 +382,7 @@ void Console::calculatePolicyValue(std::vector<float>& policy, float& value, uti
         using namespace minizero::env::moderntetris_placement;
         auto placement_network = std::static_pointer_cast<network::PlacementTransformerNetwork>(network_);
         int index = placement_network->pushBack(network::buildPlacementNetworkInput(
-            actor_->getEnvironment(), kPlacementBoardChannels,
+            actor_->getEnvironment(), actor_->getEnvironment().getBoardChannels(),
             kModernTetrisPlacementBoardHeight, kModernTetrisPlacementBoardWidth));
         auto network_output = placement_network->forward()[index];
         auto zero_output = std::static_pointer_cast<network::PlacementNetworkOutput>(network_output);

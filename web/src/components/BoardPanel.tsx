@@ -1,3 +1,4 @@
+import { AiInfoPanel } from './AiInfoPanel.tsx';
 import { BoardCanvas } from './BoardCanvas.tsx';
 import { GarbageBar } from './GarbageBar.tsx';
 import { PiecePreview } from './PiecePreview.tsx';
@@ -78,6 +79,7 @@ export function BoardPanel({ label, hud, overlay }: Props) {
               ))}
             </div>
           </div>
+          <AiInfoPanel info={hud?.aiInfo ?? {}} />
         </div>
       </div>
     </div>

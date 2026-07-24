@@ -554,6 +554,11 @@ void DataLoaderThread::setPlacementTrainingData(int batch_index)
 
     // Value.
     std::copy(value.begin(), value.end(), dp->value_ + value.size() * batch_index);
+    // Win/loss target (two-player only): size-3 one-hot over {lose, draw, win}.
+    if (config::env_modern_tetris_two_player && dp->placement_winloss_ != nullptr) {
+        const auto winloss = env_loader.getWinLossValue(pos);
+        std::copy(winloss.begin(), winloss.end(), dp->placement_winloss_ + winloss.size() * batch_index);
+    }
     dp->loss_scale_[batch_index] = loss_scale;
     dp->sampled_index_[2 * batch_index] = p.first;
     dp->sampled_index_[2 * batch_index + 1] = p.second;
