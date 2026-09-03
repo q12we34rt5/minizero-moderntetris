@@ -33,8 +33,17 @@ function fillCell(ctx: CanvasRenderingContext2D, c: number, r: number, color: st
   ctx.fillRect(x, y + CELL - 2, CELL, 2);
 }
 
-/** Draw the playfield: board cells, ghost piece, then the active piece. */
-export function drawBoard(ctx: CanvasRenderingContext2D, view: GameView) {
+/**
+ * Draw the playfield: board cells, ghost piece, then the active piece.
+ * `colors` (see game/color-tracker.ts) gives the piece type each locked cell
+ * came from; occupancy always comes from the view, so a null/stale color plane
+ * only costs the per-piece tint.
+ */
+export function drawBoard(
+  ctx: CanvasRenderingContext2D,
+  view: GameView,
+  colors: Int8Array | null = null,
+) {
   ctx.fillStyle = '#0c0c18';
   ctx.fillRect(0, 0, BOARD_PX_W, BOARD_PX_H);
 
@@ -59,12 +68,16 @@ export function drawBoard(ctx: CanvasRenderingContext2D, view: GameView) {
   // placed cells
   for (let r = 0; r < BOARD_H; r++) {
     for (let c = 0; c < BOARD_W; c++) {
-      const cell = view.board[r * BOARD_W + c];
+      const i = r * BOARD_W + c;
+      const cell = view.board[i];
       if (cell === 0) {
         ctx.fillStyle = 'rgba(255,255,255,0.015)';
         ctx.fillRect(cellX(c), cellY(r), CELL, CELL);
+      } else if (cell === 3) {
+        fillCell(ctx, c, r, GARBAGE_COLOR);
       } else {
-        fillCell(ctx, c, r, cell === 3 ? GARBAGE_COLOR : BLOCK_COLOR);
+        const type = colors ? colors[i] : -1;
+        fillCell(ctx, c, r, type >= 0 && type < PIECE_COLORS.length ? PIECE_COLORS[type] : BLOCK_COLOR);
       }
     }
   }

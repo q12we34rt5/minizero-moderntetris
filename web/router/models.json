@@ -1,0 +1,16 @@
+[
+  {
+    "id": "m1",
+    "display_name": "GAZ 2p-1",
+    "desc": "placeholder",
+    "host": "127.0.0.1",
+    "port": 62210
+  },
+  {
+    "id": "m2",
+    "display_name": "GAZ 2p-2",
+    "desc": "placeholder",
+    "host": "127.0.0.1",
+    "port": 62211
+  }
+]

@@ -221,7 +221,8 @@ main {
 }
 
 input[type='number'],
-input[type='text'] {
+input[type='text'],
+.setting-item select {
   width: 100%;
   padding: 6px 10px;
   border-radius: var(--radius-sm);
@@ -234,8 +235,20 @@ input[type='text'] {
   transition: border-color 0.2s;
 }
 
+.setting-item select {
+  cursor: pointer;
+}
+
+/* Native option lists render on the OS layer, so give them a readable
+   (non-transparent) background against the dark panel. */
+.setting-item select option {
+  background: #1a1d27;
+  color: var(--text-bright);
+}
+
 input[type='number']:focus,
-input[type='text']:focus {
+input[type='text']:focus,
+.setting-item select:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--accent-glow);
 }

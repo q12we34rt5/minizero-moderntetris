@@ -4,6 +4,7 @@ import type { GameView } from '../engine/view.ts';
 import { InputController, DEFAULT_SETTINGS, Action, type InputSettings } from '../input/controller.ts';
 import { DEFAULT_GAMEPAD_MAPPING, type GamepadMapping, type GamepadStatus } from '../input/gamepad.ts';
 import { AiClient, type AiConnectionStatus } from '../ai/client.ts';
+import { ColorTracker } from './color-tracker.ts';
 
 export type GameMode = 'single' | 'pve' | 'eve';
 export type GameStatus = 'loading' | 'playing' | 'paused' | 'gameover';
@@ -17,23 +18,49 @@ export interface GameHud {
   view: GameView;
   pps: number;
   apm: number;
+  app: number; // attack per piece
   /** Extra AI info for this board (key->value), rendered generically. Empty for human boards. */
   aiInfo: Record<string, string>;
+  /** Per-cell piece colors for locked blocks, aligned with view.board. */
+  colors: Int8Array | null;
+}
+
+/** One selectable model, as advertised by the router's GET /models. */
+export interface ModelInfo {
+  id: string;
+  displayName: string;
+  desc?: string;
 }
 
 export interface PveSettings {
   aiIntervalMs: number;
   garbageDelay: number;
-  backendUrlA: string;
-  backendUrlB: string;
+  /** Base URL of the model router (ws:// or wss://). /models and /model/<id> hang off this. */
+  routerUrl: string;
+  /** Selected model id per board; empty string = fall back to the first available model. */
+  modelA: string;
+  modelB: string;
 }
 
 const DEFAULT_PVE: PveSettings = {
   aiIntervalMs: 400,
   garbageDelay: 1,
-  backendUrlA: 'ws://localhost:8001',
-  backendUrlB: 'ws://localhost:8001',
+  routerUrl: 'ws://localhost:8000',
+  modelA: '',
+  modelB: '',
 };
+
+/** HTTP(S) base for the router's /models endpoint, derived from the ws(s):// URL. */
+function routerHttpBase(routerUrl: string): string {
+  return routerUrl.replace(/\/+$/, '').replace(/^ws/, 'http');
+}
+
+/** WS URL for a specific model id via the router, or null if unroutable. */
+function modelWsUrl(routerUrl: string, id: string): string | null {
+  const base = routerUrl.replace(/\/+$/, '');
+  if (!base || !id) return null;
+  return `${base}/model/${encodeURIComponent(id)}`;
+}
 
 // Game-rule settings that change engine behavior in every mode (single/pve/eve).
 // all_spin rides the serialized state to the AI backend, so it must match the
@@ -86,7 +113,12 @@ function newClock(): BoardClock {
   return { pieceCount: 0, startTime: 0, firstPiece: false };
 }
 
-function makeHud(view: GameView, clock: BoardClock, aiInfo: Record<string, string> = {}): GameHud {
+function makeHud(
+  view: GameView,
+  clock: BoardClock,
+  aiInfo: Record<string, string> = {},
+  colors: Int8Array | null = null,
+): GameHud {
   let pps = 0;
   let apm = 0;
   if (clock.firstPiece) {
@@ -96,7 +128,8 @@ function makeHud(view: GameView, clock: BoardClock, aiInfo: Record<string, strin
       apm = (view.totalAttack / elapsed) * 60;
     }
   }
-  return { view, pps, apm, aiInfo };
+  const app = view.pieceCount > 0 ? view.totalAttack / view.pieceCount : 0;
+  return { view, pps, apm, app, aiInfo, colors };
 }
 
 /** An in-progress AI move being played out step-by-step for animation. */
@@ -118,6 +151,8 @@ interface BoardRuntime {
   lastRequest: number;
   anim: AiAnim | null; // an AI move currently being animated
   aiInfo: Record<string, string>; // latest extra info from the AI backend (value/winloss/...)
+  colors: ColorTracker; // piece colors of the locked cells (the engine board has none)
+  connectedUrl: string | null; // the /model/<id> URL the client is currently pointed at
 }
 
 export interface UseGame {
@@ -133,6 +168,10 @@ export interface UseGame {
   setSettings: (s: InputSettings) => void;
   pveSettings: PveSettings;
   setPveSettings: (s: PveSettings) => void;
+  /** Models advertised by the router (for the per-board model picker). */
+  models: ModelInfo[];
+  /** Re-fetch the model list from the router (e.g. after editing the registry). */
+  refreshModels: () => void;
   rules: RulesSettings;
   setRules: (r: RulesSettings) => void;
   gamepadMapping: GamepadMapping;
@@ -156,6 +195,7 @@ export function useGame(): UseGame {
   const [aiStatusB, setAiStatusB] = useState<AiConnectionStatus>('disconnected');
   const [settings, setSettingsState] = useState<InputSettings>(() => load(SETTINGS_KEY, DEFAULT_SETTINGS));
   const [pveSettings, setPveSettingsState] = useState<PveSettings>(() => load(PVE_KEY, DEFAULT_PVE));
+  const [models, setModels] = useState<ModelInfo[]>([]);
   const [rules, setRulesState] = useState<RulesSettings>(() => load(RULES_KEY, DEFAULT_RULES));
   const [gamepadMapping, setGamepadMappingState] = useState<GamepadMapping>(() => load(GAMEPAD_KEY, DEFAULT_GAMEPAD_MAPPING));
   const [gamepadStatus, setGamepadStatus] = useState<GamepadStatus>({ connected: false, id: null });
@@ -163,6 +203,7 @@ export function useGame(): UseGame {
 
   const settingsRef = useRef(settings);
   const pveSettingsRef = useRef(pveSettings);
+  const modelsRef = useRef<ModelInfo[]>(models); // effect-side mirror of the fetched model list
   const rulesRef = useRef(rules);
   const gamepadMappingRef = useRef(gamepadMapping);
   const modeRef = useRef(mode);
@@ -172,6 +213,7 @@ export function useGame(): UseGame {
   // Filled in by the init effect.
   const resetRef = useRef<() => void>(() => {});
   const reconnectRef = useRef<() => void>(() => {});
+  const syncRef = useRef<() => void>(() => {});
   const pauseRef = useRef<() => void>(() => {});
   const dumpStateRef = useRef<() => string>(() => '');
 
@@ -204,10 +246,58 @@ export function useGame(): UseGame {
     setSeedState(s);
   }, []);
 
+  // Fetch the router's model list. Keeps both the React state (for the UI) and
+  // the effect-side ref (for URL resolution) in sync. On any failure the list
+  // is emptied, so the picker shows "no models" and boards stay disconnected.
+  const refreshModels = useCallback(() => {
+    const url = routerHttpBase(pveSettingsRef.current.routerUrl) + '/models';
+    fetch(url)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((data: Array<{ id: string; display_name?: string; desc?: string }>) => {
+        const list: ModelInfo[] = Array.isArray(data)
+          ? data.map((m) => ({ id: String(m.id), displayName: String(m.display_name ?? m.id), desc: m.desc }))
+          : [];
+        modelsRef.current = list;
+        setModels(list);
+        // Drop selections this router doesn't advertise. A stale id (registry
+        // edited, or a different router) would otherwise sit in localStorage
+        // forever and silently outvote the picker: <select> shows the first
+        // option when its value matches none, so re-picking that option fires
+        // no change and the old id keeps getting connected. Only when the fetch
+        // actually returned models -- an empty list means the router is down,
+        // and that must not wipe the operator's choice.
+        if (list.length > 0) {
+          const s = pveSettingsRef.current;
+          const keep = (id: string) => (id === '' || list.some((m) => m.id === id) ? id : '');
+          const [a, b] = [keep(s.modelA), keep(s.modelB)];
+          if (a !== s.modelA || b !== s.modelB) setPveSettings({ ...s, modelA: a, modelB: b });
+        }
+      })
+      .catch(() => {
+        modelsRef.current = [];
+        setModels([]);
+      });
+  }, [setPveSettings]);
+
   const reset = useCallback(() => resetRef.current(), []);
-  const reconnectAi = useCallback(() => reconnectRef.current(), []);
+  const reconnectAi = useCallback(() => {
+    refreshModels(); // operator may have edited the registry; pick it up on reconnect
+    reconnectRef.current();
+  }, [refreshModels]);
   const togglePause = useCallback(() => pauseRef.current(), []);
   const dumpState = useCallback(() => dumpStateRef.current(), []);
+
+  // (Re)fetch models whenever the router URL changes (and once on mount).
+  useEffect(() => {
+    refreshModels();
+  }, [pveSettings.routerUrl, refreshModels]);
+
+  // The list arrives after the first reset, and a model switch should take hold
+  // without waiting for a Reset -- re-sync the clients on either change. No-op
+  // before the init effect has filled syncRef in.
+  useEffect(() => {
+    syncRef.current();
+  }, [models, pveSettings.modelA, pveSettings.modelB]);
 
   const setMode = useCallback((m: GameMode) => {
     modeRef.current = m;
@@ -246,8 +336,21 @@ export function useGame(): UseGame {
         eb.dispose();
         return;
       }
-      boardA = { id: 'A', engine: ea, client: clientA, control: 'human', clock: newClock(), pending: false, lastRequest: 0, anim: null, aiInfo: {} };
-      boardB = { id: 'B', engine: eb, client: clientB, control: 'none', clock: newClock(), pending: false, lastRequest: 0, anim: null, aiInfo: {} };
+      boardA = { id: 'A', engine: ea, client: clientA, control: 'human', clock: newClock(), pending: false, lastRequest: 0, anim: null, aiInfo: {}, colors: new ColorTracker(), connectedUrl: null };
+      boardB = { id: 'B', engine: eb, client: clientB, control: 'none', clock: newClock(), pending: false, lastRequest: 0, anim: null, aiInfo: {}, colors: new ColorTracker(), connectedUrl: null };
+
+      // Every board mutation the color plane cares about happens on a hard drop
+      // (the engine locks pieces only in hardDrop()), so track around that step
+      // and let every other action go straight through.
+      const stepBoard = (board: BoardRuntime, action: number) => {
+        if (action !== Action.HARD_DROP) {
+          board.engine.step(action);
+          return;
+        }
+        board.colors.noteLock(board.engine.read());
+        board.engine.step(action);
+        board.colors.sync(board.engine.read());
+      };
 
       const garbageDelay = () => pveSettingsRef.current.garbageDelay;
       const sendGarbage = (lines: number, opponent: BoardRuntime) => {
@@ -313,7 +416,7 @@ export function useGame(): UseGame {
             ? Math.round(anim.stepInterval * HARD_DROP_FACTOR)
             : anim.stepInterval;
           if (now - anim.lastStepTime < required) break;
-          board.engine.step(anim.actions[anim.index]);
+          stepBoard(board, anim.actions[anim.index]);
           anim.index += 1;
           anim.lastStepTime += required;
           if (anim.index >= anim.actions.length) {
@@ -336,7 +439,7 @@ export function useGame(): UseGame {
         if (!input) return;
         const actions = input.collect(now);
         for (const a of actions) {
-          board.engine.step(a);
+          stepBoard(board, a);
           if (a !== Action.HARD_DROP) continue;
           const v = board.engine.read();
           if (v.pieceCount <= board.clock.pieceCount) continue;
@@ -346,18 +449,39 @@ export function useGame(): UseGame {
             board.clock.startTime = now;
           }
           sendGarbage(v.linesSent, opponent);
-          for (const e of input.onNewPiece(now)) board.engine.step(e);
+          for (const e of input.onNewPiece(now)) stepBoard(board, e);
         }
         if (!board.engine.read().isAlive) {
           endGame(opponent.control === 'none' ? null : opponent.id);
         }
       };
 
-      const syncClient = (board: BoardRuntime, url: string) => {
-        if (board.control === 'ai') {
-          if (board.client.status === 'disconnected') board.client.connect(url);
-        } else {
+      // The /model/<id> URL an AI board should be pointed at, from the router
+      // base + its selected model (empty selection falls back to the first
+      // advertised model). null = unroutable (no base / no models loaded yet).
+      const resolveUrl = (boardId: 'A' | 'B'): string | null => {
+        const s = pveSettingsRef.current;
+        const selected = boardId === 'A' ? s.modelA : s.modelB;
+        // An id the router doesn't advertise resolves like "auto" rather than
+        // being sent as-is, so the connection always matches what the picker
+        // shows (which falls back to the first model for an unknown value).
+        const known = modelsRef.current.some((m) => m.id === selected);
+        const id = (known ? selected : '') || modelsRef.current[0]?.id || '';
+        return modelWsUrl(s.routerUrl, id);
+      };
+
+      // Connect an AI board to its resolved model URL; reconnect if the target
+      // changed (model switch) and disconnect non-AI boards. Idempotent when
+      // already pointed at the right URL, so it's safe to call every reset.
+      const syncClient = (board: BoardRuntime, url: string | null) => {
+        if (board.control !== 'ai' || !url) {
           board.client.disconnect();
+          board.connectedUrl = null;
+          return;
+        }
+        if (board.client.status === 'disconnected' || board.connectedUrl !== url) {
+          board.client.connect(url);
+          board.connectedUrl = url;
         }
       };
 
@@ -383,6 +507,7 @@ export function useGame(): UseGame {
         boardA.pending = false;
         boardA.lastRequest = 0;
         boardA.anim = null;
+        boardA.colors.reset();
 
         if (cB !== 'none') {
           boardB.engine.setConfig(0, false, allSpin);
@@ -391,10 +516,11 @@ export function useGame(): UseGame {
           boardB.pending = false;
           boardB.lastRequest = 0;
           boardB.anim = null;
+          boardB.colors.reset();
         }
 
-        syncClient(boardA, pveSettingsRef.current.backendUrlA);
-        syncClient(boardB, pveSettingsRef.current.backendUrlB);
+        syncClient(boardA, resolveUrl('A'));
+        syncClient(boardB, resolveUrl('B'));
 
         const now = performance.now();
         input.reset(now);
@@ -402,8 +528,8 @@ export function useGame(): UseGame {
 
         setWinner(null);
         setStatusBoth('playing');
-        setHud(makeHud(boardA.engine.read(), boardA.clock, boardA.aiInfo));
-        setAiHud(cB !== 'none' ? makeHud(boardB.engine.read(), boardB.clock, boardB.aiInfo) : null);
+        setHud(makeHud(boardA.engine.read(), boardA.clock, boardA.aiInfo, boardA.colors.visible()));
+        setAiHud(cB !== 'none' ? makeHud(boardB.engine.read(), boardB.clock, boardB.aiInfo, boardB.colors.visible()) : null);
       };
       resetRef.current = doReset;
 
@@ -418,10 +544,24 @@ export function useGame(): UseGame {
         return parts.join('\n\n');
       };
 
+      // Re-point the AI clients at their currently resolved model. Idempotent
+      // (syncClient no-ops when the URL is unchanged), so it's safe to run on
+      // every model-list / selection change.
+      syncRef.current = () => {
+        if (!boardA || !boardB) return;
+        syncClient(boardA, resolveUrl('A'));
+        syncClient(boardB, resolveUrl('B'));
+      };
+
       reconnectRef.current = () => {
         if (!boardA || !boardB) return;
-        if (boardA.control === 'ai') boardA.client.connect(pveSettingsRef.current.backendUrlA);
-        if (boardB.control === 'ai') boardB.client.connect(pveSettingsRef.current.backendUrlB);
+        for (const board of [boardA, boardB]) {
+          if (board.control !== 'ai') continue;
+          const url = resolveUrl(board.id);
+          if (!url) continue;
+          board.client.connect(url);
+          board.connectedUrl = url;
+        }
       };
 
       pauseRef.current = () => {
@@ -460,8 +600,8 @@ export function useGame(): UseGame {
 
         // Publish every frame so stats / garbage meters stay current even when
         // a board is idle (e.g. garbage arriving from the opponent).
-        setHud(makeHud(boardA.engine.read(), boardA.clock, boardA.aiInfo));
-        setAiHud(boardB.control !== 'none' ? makeHud(boardB.engine.read(), boardB.clock, boardB.aiInfo) : null);
+        setHud(makeHud(boardA.engine.read(), boardA.clock, boardA.aiInfo, boardA.colors.visible()));
+        setAiHud(boardB.control !== 'none' ? makeHud(boardB.engine.read(), boardB.clock, boardB.aiInfo, boardB.colors.visible()) : null);
       };
 
       doReset();
@@ -494,6 +634,8 @@ export function useGame(): UseGame {
     setSettings,
     pveSettings,
     setPveSettings,
+    models,
+    refreshModels,
     rules,
     setRules,
     gamepadMapping,
