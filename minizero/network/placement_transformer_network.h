@@ -4,6 +4,7 @@
 #include "utils.h"
 #include <algorithm>
 #include <cassert>
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -198,7 +199,8 @@ public:
         const int W = batch_inputs_.front().board_width;
         const int F = batch_inputs_.front().afterstate_feature_size;
 
-        // Build per-batch tensors. Allocate flat backing storage then from_blob.
+        // Build per-batch tensors. Fill flat backing storage, then copy it into
+        // the tensors via make_tensor() below.
         std::vector<float> board_buf(B * C * H * W, 0.0f);
         std::vector<int64_t> current_buf(B, 0);
         std::vector<int64_t> hold_buf(B, 0);
@@ -265,24 +267,44 @@ public:
         auto opts_float = torch::TensorOptions().dtype(torch::kFloat32);
         auto opts_bool = torch::TensorOptions().dtype(torch::kBool);
 
-        auto board_t = torch::from_blob(board_buf.data(), {B, C, H, W}, opts_float).clone();
-        auto current_t = torch::from_blob(current_buf.data(), {B}, opts_long).clone();
-        auto hold_t = torch::from_blob(hold_buf.data(), {B}, opts_long).clone();
-        auto has_held_t = torch::from_blob(has_held_buf.data(), {B}, opts_float).clone();
-        auto preview_t = torch::from_blob(preview_buf.data(), {B, preview_size}, opts_long).clone();
-        auto was_rotation_t = torch::from_blob(was_rotation_buf.data(), {B}, opts_float).clone();
-        auto srs_index_t = torch::from_blob(srs_index_buf.data(), {B}, opts_long).clone();
-        auto combo_t = torch::from_blob(combo_buf.data(), {B}, opts_float).clone();
-        auto b2b_t = torch::from_blob(b2b_buf.data(), {B}, opts_float).clone();
-        auto garbage_t = torch::from_blob(garbage_buf.data(), {B}, opts_float).clone();
-        auto a_use_hold_t = torch::from_blob(a_use_hold_buf.data(), {B, n_max}, opts_long).clone();
-        auto a_lock_x_t = torch::from_blob(a_lock_x_buf.data(), {B, n_max}, opts_long).clone();
-        auto a_lock_y_t = torch::from_blob(a_lock_y_buf.data(), {B, n_max}, opts_long).clone();
-        auto a_orient_t = torch::from_blob(a_orient_buf.data(), {B, n_max}, opts_long).clone();
-        auto a_spin_t = torch::from_blob(a_spin_buf.data(), {B, n_max}, opts_long).clone();
-        auto a_piece_t = torch::from_blob(a_piece_buf.data(), {B, n_max}, opts_long).clone();
-        auto a_clear_t = torch::from_blob(a_clear_buf.data(), {B, n_max}, opts_long).clone();
-        auto mask_t = torch::from_blob(action_mask_buf.data(), {B, n_max}, opts_bool).clone();
+        // Build each batch tensor with an explicit serial copy rather than
+        // from_blob(...).clone().
+        //
+        // clone() goes through TensorIterator, which hands any copy larger than
+        // at::internal::GRAIN_SIZE (32768 elements) to the intra-op thread pool.
+        // That pool is sized to the machine (24 threads on a 48-core box) and its
+        // workers spin before parking, so on a loaded machine one oversized clone
+        // costs tens of milliseconds of wall time and leaves the whole pool
+        // burning CPU between calls -- measured here at 22 ms per clone versus
+        // 11 us for the same copy done serially. Every tensor below used to sit
+        // under the threshold by luck; B * n_max * afterstate_feature_size is the
+        // first that does not, and B * n_max crosses it too once
+        // zero_num_parallel_games and the legal-placement count are both large.
+        auto make_tensor = [](const auto& buf, c10::IntArrayRef shape, const torch::TensorOptions& opts) {
+            auto tensor = torch::empty(shape, opts);
+            assert(tensor.nbytes() == buf.size() * sizeof(buf[0]));
+            std::memcpy(tensor.data_ptr(), buf.data(), buf.size() * sizeof(buf[0]));
+            return tensor;
+        };
+
+        auto board_t = make_tensor(board_buf, {B, C, H, W}, opts_float);
+        auto current_t = make_tensor(current_buf, {B}, opts_long);
+        auto hold_t = make_tensor(hold_buf, {B}, opts_long);
+        auto has_held_t = make_tensor(has_held_buf, {B}, opts_float);
+        auto preview_t = make_tensor(preview_buf, {B, preview_size}, opts_long);
+        auto was_rotation_t = make_tensor(was_rotation_buf, {B}, opts_float);
+        auto srs_index_t = make_tensor(srs_index_buf, {B}, opts_long);
+        auto combo_t = make_tensor(combo_buf, {B}, opts_float);
+        auto b2b_t = make_tensor(b2b_buf, {B}, opts_float);
+        auto garbage_t = make_tensor(garbage_buf, {B}, opts_float);
+        auto a_use_hold_t = make_tensor(a_use_hold_buf, {B, n_max}, opts_long);
+        auto a_lock_x_t = make_tensor(a_lock_x_buf, {B, n_max}, opts_long);
+        auto a_lock_y_t = make_tensor(a_lock_y_buf, {B, n_max}, opts_long);
+        auto a_orient_t = make_tensor(a_orient_buf, {B, n_max}, opts_long);
+        auto a_spin_t = make_tensor(a_spin_buf, {B, n_max}, opts_long);
+        auto a_piece_t = make_tensor(a_piece_buf, {B, n_max}, opts_long);
+        auto a_clear_t = make_tensor(a_clear_buf, {B, n_max}, opts_long);
+        auto mask_t = make_tensor(action_mask_buf, {B, n_max}, opts_bool);
 
         auto dev = getDevice();
         std::vector<torch::jit::IValue> args{
@@ -306,7 +328,7 @@ public:
             mask_t.to(dev),
         };
         if (F > 0) {
-            auto a_afterstate_t = torch::from_blob(a_afterstate_buf.data(), {B, n_max, F}, opts_float).clone();
+            auto a_afterstate_t = make_tensor(a_afterstate_buf, {B, n_max, F}, opts_float);
             args.push_back(a_afterstate_t.to(dev));
         }
 
