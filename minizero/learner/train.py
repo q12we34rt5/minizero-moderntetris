@@ -301,6 +301,10 @@ def train(model, training_dir, data_loader, start_iter, end_iter):
             loss_value = -((label_value * nn.functional.log_softmax(network_output["value_logit"], dim=1)).sum(dim=1) * loss_scale).mean()
             loss = loss_policy + py.get_value_loss_scale() * loss_value
             add_training_info(training_info, 'loss_policy', loss_policy.item())
+            # Top-1 agreement between the raw policy argmax and the action the
+            # search actually preferred. Padded slots are -1e9 in `logits` and 0
+            # in `label_policy`, so neither argmax can land on one.
+            add_training_info(training_info, 'accuracy_policy', calculate_accuracy(logits, label_policy, py.get_batch_size()))
             add_training_info(training_info, 'loss_value', loss_value.item())
             loss.backward()
             model.optimizer.step()
