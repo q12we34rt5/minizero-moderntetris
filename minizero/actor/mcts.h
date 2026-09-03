@@ -120,7 +120,8 @@ public:
     // Two-player placement backup: env return backs up per-player skipping the
     // opponent's plies (no flip); win/loss backs up zero-sum (flipped at read).
     // env_self = network env value of the leaf's to-move player; env_opp = the
-    // other player's env value (0 until a 2-output env head supplies it);
+    // other player's (last-mover's) env value from the 2-output env head (Design
+    // A), so both env chains are seeded with real values -- 0 only at terminals;
     // winloss = leaf win/loss in [-1, 1] from the to-move player's perspective.
     virtual void backupTwoPlayerPlacement(const std::vector<MCTSNode*>& node_path, float env_self, float env_opp, float winloss, float leaf_reward);
 

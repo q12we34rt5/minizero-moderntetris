@@ -251,6 +251,10 @@ void Console::cmdGetAiInfo(const std::vector<std::string>& args)
     std::ostringstream oss;
     oss << "value=" << out->value_;
     if (config::env_modern_tetris_two_player) {
+        // value      = to-move player's own env return (self)
+        // value_opp  = opponent's (last-mover's) env return, from the 2-output head
+        // winloss    = to-move player's win/loss in [-1, 1]
+        oss << " value_opp=" << out->value_opp_;
         oss << " winloss=" << out->winloss_value_;
     }
     reply(ConsoleResponse::kSuccess, oss.str());

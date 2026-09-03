@@ -110,8 +110,10 @@ void ZeroActor::afterNNEvaluation(const std::shared_ptr<NetworkOutput>& network_
             auto placement_output = std::static_pointer_cast<PlacementNetworkOutput>(network_output);
             getMCTS()->expand(leaf_node, calculatePlacementActionPolicy(env_transition, placement_output));
             if (config::env_modern_tetris_two_player) {
-                // env_opp = 0 until a two-output env head supplies the opponent's return.
-                getMCTS()->backupTwoPlayerPlacement(node_path, placement_output->value_, 0.0f, placement_output->winloss_value_, env_transition.getReward());
+                // Design A: env head predicts both the to-move player's return
+                // (value_) and the opponent's/last-mover's return (value_opp_), so
+                // both env chains are seeded with real values (no fabricated 0).
+                getMCTS()->backupTwoPlayerPlacement(node_path, placement_output->value_, placement_output->value_opp_, placement_output->winloss_value_, env_transition.getReward());
             } else {
                 getMCTS()->backup(node_path, placement_output->value_, env_transition.getReward());
             }

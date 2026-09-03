@@ -44,6 +44,7 @@ public:
     float* placement_back_to_back_ = nullptr;      // [B]
     float* placement_garbage_ = nullptr;           // [B]
     float* placement_winloss_ = nullptr;           // [B * winloss_value_size], two-player only
+    float* placement_value_opp_ = nullptr;         // [B * discrete_value_size], two-player only (opponent env value target)
     int64_t* placement_action_use_hold_ = nullptr; // [B * N_max]
     int64_t* placement_action_lock_x_ = nullptr;
     int64_t* placement_action_lock_y_ = nullptr;

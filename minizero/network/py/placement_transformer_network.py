@@ -203,7 +203,8 @@ class PlacementTransformerNetwork(nn.Module):
                  dropout: float = 0.1,
                  num_value_hidden_channels: int = 256,
                  discrete_value_size: int = 601,
-                 winloss_value_size: int = 0):
+                 winloss_value_size: int = 0,
+                 predict_opp_value: bool = False):
         super().__init__()
         self.game_name = game_name
         self.board_channels = board_channels
@@ -219,6 +220,11 @@ class PlacementTransformerNetwork(nn.Module):
         # Two-player mode adds a separate zero-sum win/loss head (distributional
         # over {lose, draw, win}); 0 disables it (single-player).
         self.winloss_value_size = winloss_value_size
+        # Two-player mode also adds a second env value head predicting the
+        # OPPONENT's (last-mover's) return (Design A), so the MCTS backup can seed
+        # both players' env chains with real values. The primary value head still
+        # predicts the to-move player's return (aligned with the policy).
+        self.predict_opp_value = predict_opp_value
 
         self.patch_embed = BoardPatchEmbed(board_channels, board_height, board_width,
                                            patch_size, d_model)
@@ -279,6 +285,26 @@ class PlacementTransformerNetwork(nn.Module):
             nn.Linear(num_value_hidden_channels, self._winloss_built_size),
         )
 
+        # Opponent env value head (two-player only): same shape as value_head, on
+        # the same VALUE token, predicting the opponent's (last-mover's) return.
+        # Always constructed (TorchScript needs a concrete submodule); its output
+        # is emitted only when predict_opp_value is set.
+        if discrete_value_size == 1:
+            self.opp_value_head = nn.Sequential(
+                nn.LayerNorm(d_model),
+                nn.Linear(d_model, num_value_hidden_channels),
+                nn.GELU(),
+                nn.Linear(num_value_hidden_channels, 1),
+                nn.Tanh(),
+            )
+        else:
+            self.opp_value_head = nn.Sequential(
+                nn.LayerNorm(d_model),
+                nn.Linear(d_model, num_value_hidden_channels),
+                nn.GELU(),
+                nn.Linear(num_value_hidden_channels, discrete_value_size),
+            )
+
     @torch.jit.export
     def get_type_name(self) -> str:
         return "placement_transformer"
@@ -286,6 +312,10 @@ class PlacementTransformerNetwork(nn.Module):
     @torch.jit.export
     def get_winloss_value_size(self) -> int:
         return self.winloss_value_size
+
+    @torch.jit.export
+    def get_predict_opp_value(self) -> bool:
+        return self.predict_opp_value
 
     @torch.jit.export
     def get_game_name(self) -> str:
@@ -382,6 +412,14 @@ class PlacementTransformerNetwork(nn.Module):
             winloss_logit = self.winloss_head(h_value)                                # [B, Vw]
             out["winloss_logit"] = winloss_logit
             out["winloss"] = torch.softmax(winloss_logit, dim=1)
+
+        if self.predict_opp_value:
+            if self.discrete_value_size == 1:
+                out["value_opp"] = self.opp_value_head(h_value).squeeze(-1)           # [B]
+            else:
+                opp_value_logit = self.opp_value_head(h_value)                        # [B, V]
+                out["value_opp_logit"] = opp_value_logit
+                out["value_opp"] = torch.softmax(opp_value_logit, dim=1)
         return out
 
 

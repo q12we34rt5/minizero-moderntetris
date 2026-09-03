@@ -96,7 +96,8 @@ inline PlacementNetworkInput buildPlacementNetworkInput(const Env& env,
 
 class PlacementNetworkOutput : public NetworkOutput {
 public:
-    float value_;                      // env value (expected accumulated score)
+    float value_;                      // env value: to-move player's expected accumulated score
+    float value_opp_;                  // two-player: opponent's (last-mover's) expected score; 0 when absent
     float winloss_value_;              // two-player win/loss in [-1, 1]; 0 when the head is absent
     std::vector<float> policy_;        // size N (legal placements)
     std::vector<float> policy_logits_; // size N
@@ -104,6 +105,7 @@ public:
     explicit PlacementNetworkOutput(int n)
     {
         value_ = 0.0f;
+        value_opp_ = 0.0f;
         winloss_value_ = 0.0f;
         policy_.resize(n, 0.0f);
         policy_logits_.resize(n, 0.0f);
@@ -137,6 +139,12 @@ public:
         winloss_value_size_ = 0;
         if (network_.find_method("get_winloss_value_size")) {
             winloss_value_size_ = network_.get_method("get_winloss_value_size")(dummy).toInt();
+        }
+        // Two-player Design A models also expose a second env value head predicting
+        // the opponent's return; probe for it (older checkpoints lack it).
+        predict_opp_value_ = false;
+        if (network_.find_method("get_predict_opp_value")) {
+            predict_opp_value_ = network_.get_method("get_predict_opp_value")(dummy).toBool();
         }
         // Placement action space is variable N per state. These fields must not be
         // -1 because callers multiply them into tree-sizing arithmetic (overflow ->
@@ -307,6 +315,12 @@ public:
         at::Tensor winloss_output;
         if (has_winloss) { winloss_output = result.at("winloss").toTensor().to(at::kCPU).contiguous(); }
 
+        // Opponent env value head (two-player Design A): same distributional form
+        // as the primary value head, decoded the same way.
+        const bool has_opp_value = predict_opp_value_ && result.contains("value_opp");
+        at::Tensor value_opp_output;
+        if (has_opp_value) { value_opp_output = result.at("value_opp").toTensor().to(at::kCPU).contiguous(); }
+
         std::vector<std::shared_ptr<NetworkOutput>> outputs;
         outputs.reserve(B);
         for (int i = 0; i < B; ++i) {
@@ -341,6 +355,21 @@ public:
                 }
                 out->winloss_value_ = wl;
             }
+
+            if (has_opp_value) {
+                // Decode the opponent env value identically to the primary value.
+                if (discrete_value_size_ == 1) {
+                    out->value_opp_ = value_opp_output[i].item<float>();
+                } else {
+                    int start_value = -discrete_value_size_ / 2;
+                    const float* vrow = value_opp_output.data_ptr<float>() + i * discrete_value_size_;
+                    float v = 0.0f;
+                    for (int k = 0; k < discrete_value_size_; ++k) {
+                        v += vrow[k] * static_cast<float>(start_value + k);
+                    }
+                    out->value_opp_ = utils::invertValue(v);
+                }
+            }
             outputs.push_back(std::move(out));
         }
 
@@ -360,6 +389,7 @@ protected:
 
     int batch_size_ = 0;
     int winloss_value_size_ = 0; // 0 = no win/loss head (single-player)
+    bool predict_opp_value_ = false; // two-player Design A: opponent env value head present
     std::mutex mutex_;
     std::vector<PlacementNetworkInput> batch_inputs_;
 

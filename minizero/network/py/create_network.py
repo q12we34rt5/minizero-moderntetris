@@ -69,6 +69,7 @@ def create_network(game_name="tietactoe",
                 num_value_hidden_channels=num_value_hidden_channels,
                 discrete_value_size=discrete_value_size,
                 winloss_value_size=cfg.get("winloss_value_size", 0),
+                predict_opp_value=cfg.get("predict_opp_value", False),
             )
     elif network_type_name == "muzero":
         if "atari" in game_name:

@@ -92,12 +92,13 @@ PYBIND11_MODULE(minizero_py, m)
         // Mirrors network::kPlacementActionUpperBound (kept inline to avoid dragging torch into pybind TU).
         .def("placement_n_max", []() { return 256; })
         .def(
-            "sample_data_placement", [](learner::DataLoader& dl, py::array_t<float>& board, py::array_t<float>& policy, py::array_t<float>& value, py::array_t<float>& winloss, py::array_t<float>& loss_scale, py::array_t<int>& sampled_index, py::array_t<int64_t>& current_piece, py::array_t<int64_t>& hold_piece, py::array_t<float>& has_held, py::array_t<int64_t>& preview, py::array_t<float>& was_rotation, py::array_t<int64_t>& srs_index, py::array_t<float>& combo, py::array_t<float>& back_to_back, py::array_t<float>& garbage, py::array_t<int64_t>& a_use_hold, py::array_t<int64_t>& a_lock_x, py::array_t<int64_t>& a_lock_y, py::array_t<int64_t>& a_orientation, py::array_t<int64_t>& a_spin, py::array_t<int64_t>& a_piece, py::array_t<int64_t>& a_lines, py::array_t<uint8_t>& a_mask, int n_max, int preview_size) {
+            "sample_data_placement", [](learner::DataLoader& dl, py::array_t<float>& board, py::array_t<float>& policy, py::array_t<float>& value, py::array_t<float>& value_opp, py::array_t<float>& winloss, py::array_t<float>& loss_scale, py::array_t<int>& sampled_index, py::array_t<int64_t>& current_piece, py::array_t<int64_t>& hold_piece, py::array_t<float>& has_held, py::array_t<int64_t>& preview, py::array_t<float>& was_rotation, py::array_t<int64_t>& srs_index, py::array_t<float>& combo, py::array_t<float>& back_to_back, py::array_t<float>& garbage, py::array_t<int64_t>& a_use_hold, py::array_t<int64_t>& a_lock_x, py::array_t<int64_t>& a_lock_y, py::array_t<int64_t>& a_orientation, py::array_t<int64_t>& a_spin, py::array_t<int64_t>& a_piece, py::array_t<int64_t>& a_lines, py::array_t<uint8_t>& a_mask, int n_max, int preview_size) {
                 auto dp = dl.getSharedData()->getDataPtr();
                 dp->features_ = static_cast<float*>(board.request().ptr);
                 dp->policy_ = static_cast<float*>(policy.request().ptr);
                 dp->value_ = static_cast<float*>(value.request().ptr);
                 dp->placement_winloss_ = (winloss.size() > 0) ? static_cast<float*>(winloss.request().ptr) : nullptr;
+                dp->placement_value_opp_ = (value_opp.size() > 0) ? static_cast<float*>(value_opp.request().ptr) : nullptr;
                 dp->loss_scale_ = static_cast<float*>(loss_scale.request().ptr);
                 dp->sampled_index_ = static_cast<int*>(sampled_index.request().ptr);
                 dp->placement_current_piece_ = static_cast<int64_t*>(current_piece.request().ptr);

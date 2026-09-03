@@ -247,6 +247,13 @@ public:
     // in two-player mode.
     std::vector<float> getWinLossValue(const int pos) const;
 
+    // Two-player env value target for the OPPONENT output of the 2-output env
+    // head (Design A): the return of the player who moved INTO state pos (the
+    // opponent of the to-move player). This is what the MCTS backup seeds the
+    // opponent's env chain with, so no fabricated 0 is ever backed up. Only
+    // meaningful in two-player mode.
+    std::vector<float> getOppValue(const int pos) const { return toDiscreteValue(pos < static_cast<int>(action_pairs_.size()) ? utils::transformValue(calculateOppNStepValue(pos)) : 0.0f); }
+
     std::string name() const override { return kModernTetrisPlacementName; }
     int getPolicySize() const override { return kMaxPlacementActionId; }
     int getChanceEventSize() const override { return kModernTetrisPlacementChanceEventSize; }
@@ -256,6 +263,7 @@ public:
 
 private:
     float calculateNStepValue(const int pos) const;
+    float calculateOppNStepValue(const int pos) const;
     std::vector<float> toDiscreteValue(float value) const;
 };
 

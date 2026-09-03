@@ -50,9 +50,15 @@ class MinizeroDadaLoader:
         W = py.get_nn_input_channel_width()
         self._pl_channels = C
         self._pl_winloss_size = py.get_placement_winloss_value_size()  # 0 disables the head (single-player)
+        # Opponent env value head (Design A) is present in two-player mode; its
+        # target is a full discrete_value_size distribution like the primary value.
+        self._pl_predict_opp = py.get_env_modern_tetris_two_player()
         self._pl_board = np.zeros(B * C * H * W, dtype=np.float32)
         self.policy = np.zeros(B * N, dtype=np.float32)
         self.value = np.zeros(B * py.get_nn_discrete_value_size(), dtype=np.float32)
+        # Always allocate at least 1 element (valid pybind array); C++ fills it only
+        # in two-player mode.
+        self.value_opp = np.zeros(B * (py.get_nn_discrete_value_size() if self._pl_predict_opp else 1), dtype=np.float32)
         # Always allocate at least 1 element so the pybind array_t is valid; the
         # C++ side keys on winloss.size() > 0 and on two_player to decide whether
         # to fill it.
@@ -84,7 +90,7 @@ class MinizeroDadaLoader:
         # Reset mask to padded before each sample (C++ side writes valid positions).
         self._pl_a_mask.fill(1)
         self.data_loader.sample_data_placement(
-            self._pl_board, self.policy, self.value, self.winloss, self.loss_scale, self.sampled_index,
+            self._pl_board, self.policy, self.value, self.value_opp, self.winloss, self.loss_scale, self.sampled_index,
             self._pl_current, self._pl_hold, self._pl_has_held, self._pl_preview,
             self._pl_was_rotation, self._pl_srs, self._pl_combo,
             self._pl_b2b, self._pl_garbage,
@@ -128,12 +134,15 @@ class MinizeroDadaLoader:
         }
         policy = torch.FloatTensor(self.policy.reshape(B, N)[:, :Nr].copy()).to(device)
         value = torch.FloatTensor(self.value).view(B, py.get_nn_discrete_value_size()).to(device)
+        value_opp = None
+        if self._pl_predict_opp:
+            value_opp = torch.FloatTensor(self.value_opp).view(B, py.get_nn_discrete_value_size()).to(device)
         winloss = None
         if self._pl_winloss_size > 0:
             winloss = torch.FloatTensor(self.winloss).view(B, self._pl_winloss_size).to(device)
         loss_scale = torch.FloatTensor(self.loss_scale / max(1e-8, float(np.amax(self.loss_scale)))).to(device)
         sampled_index = self.sampled_index
-        return batch, policy, value, winloss, loss_scale, sampled_index
+        return batch, policy, value, value_opp, winloss, loss_scale, sampled_index
 
     def load_data(self, training_dir, start_iter, end_iter):
         for i in range(start_iter, end_iter + 1):
@@ -188,6 +197,8 @@ class Model:
                 "backbone": py.get_nn_placement_backbone(),
                 # 3-class {lose, draw, win} head in two-player mode; 0 disables it.
                 "winloss_value_size": 3 if py.get_env_modern_tetris_two_player() else 0,
+                # Second env value head predicting the opponent's return (Design A).
+                "predict_opp_value": py.get_env_modern_tetris_two_player(),
             }
         self.network = create_network(py.get_game_name(),
                                       py.get_nn_num_input_channels(),
@@ -298,7 +309,7 @@ def train(model, training_dir, data_loader, start_iter, end_iter):
                 for g in model.optimizer.param_groups:
                     g["lr"] = base_lr
 
-            batch, label_policy, label_value, label_winloss, loss_scale, _ = data_loader._sample_placement(model.device)
+            batch, label_policy, label_value, label_value_opp, label_winloss, loss_scale, _ = data_loader._sample_placement(model.device)
             network_output = model.network(batch["board"], batch["current"], batch["hold"], batch["has_held"],
                                            batch["preview"], batch["was_rotation"], batch["srs"],
                                            batch["combo"], batch["b2b"], batch["garbage"],
@@ -314,6 +325,12 @@ def train(model, training_dir, data_loader, start_iter, end_iter):
             loss = loss_policy + py.get_value_loss_scale() * loss_value
             add_training_info(training_info, 'loss_policy', loss_policy.item())
             add_training_info(training_info, 'loss_value', loss_value.item())
+            # Two-player opponent env value head (Design A): distributional CE, same
+            # form as the primary value loss.
+            if label_value_opp is not None and "value_opp_logit" in network_output:
+                loss_value_opp = -((label_value_opp * nn.functional.log_softmax(network_output["value_opp_logit"], dim=1)).sum(dim=1) * loss_scale).mean()
+                loss = loss + py.get_value_loss_scale() * loss_value_opp
+                add_training_info(training_info, 'loss_value_opp', loss_value_opp.item())
             # Two-player win/loss head: distributional cross-entropy over {lose, draw, win}.
             if label_winloss is not None and "winloss_logit" in network_output:
                 loss_winloss = -((label_winloss * nn.functional.log_softmax(network_output["winloss_logit"], dim=1)).sum(dim=1) * loss_scale).mean()

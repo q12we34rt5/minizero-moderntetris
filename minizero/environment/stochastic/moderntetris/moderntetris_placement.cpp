@@ -629,6 +629,31 @@ float ModernTetrisPlacementEnvLoader::calculateNStepValue(const int pos) const
     return value + n_step_value;
 }
 
+float ModernTetrisPlacementEnvLoader::calculateOppNStepValue(const int pos) const
+{
+    assert(pos < static_cast<int>(action_pairs_.size()));
+
+    // Opponent target (Design A, two-player only): the return of the player who
+    // moved INTO state pos -- the opponent of the to-move player. That player's
+    // own rewards land one ply ahead (pos+1, pos+3, ...), stride 2 like the self
+    // target. The bootstrap is that same player's recorded (self) V one ply past
+    // the stride-2 horizon, at pos + 2*n_step + 1, where they are again the
+    // to-move player -- so no separate opponent V tag needs to be recorded.
+    const int n_step = config::learner_n_step_return;
+    const float discount = config::actor_mcts_reward_discount;
+    const size_t bootstrap_index = static_cast<size_t>(pos) + static_cast<size_t>(n_step) * 2 + 1;
+    float value = 0.0f;
+    const float n_step_value = (bootstrap_index < action_pairs_.size())
+                                   ? std::pow(discount, n_step) * BaseEnvLoader::getValue(bootstrap_index)[0]
+                                   : 0.0f;
+    for (int k = 0; k < n_step; ++k) {
+        const size_t index = static_cast<size_t>(pos) + 1 + static_cast<size_t>(k) * 2;
+        if (index >= action_pairs_.size()) { break; }
+        value += std::pow(discount, k) * BaseEnvLoader::getReward(index)[0];
+    }
+    return value + n_step_value;
+}
+
 std::vector<float> ModernTetrisPlacementEnvLoader::getWinLossValue(const int pos) const
 {
     // One-hot over {lose (idx0, -1), draw (idx1, 0), win (idx2, +1)}.

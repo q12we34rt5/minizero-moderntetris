@@ -559,6 +559,11 @@ void DataLoaderThread::setPlacementTrainingData(int batch_index)
         const auto winloss = env_loader.getWinLossValue(pos);
         std::copy(winloss.begin(), winloss.end(), dp->placement_winloss_ + winloss.size() * batch_index);
     }
+    // Opponent env value target (two-player Design A): the last-mover's return.
+    if (config::env_modern_tetris_two_player && dp->placement_value_opp_ != nullptr) {
+        const auto value_opp = env_loader.getOppValue(pos);
+        std::copy(value_opp.begin(), value_opp.end(), dp->placement_value_opp_ + value_opp.size() * batch_index);
+    }
     dp->loss_scale_[batch_index] = loss_scale;
     dp->sampled_index_[2 * batch_index] = p.first;
     dp->sampled_index_[2 * batch_index + 1] = p.second;
