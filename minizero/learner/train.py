@@ -67,6 +67,12 @@ class MinizeroDadaLoader:
         self._pl_a_piece = np.zeros(B * N, dtype=np.int64)
         self._pl_a_lines = np.zeros(B * N, dtype=np.int64)
         self._pl_a_mask = np.ones(B * N, dtype=np.uint8)  # default all padded
+        # Per-action afterstate summary; F == 0 (and the buffer empty) when
+        # nn_placement_use_afterstate_feature is off, in which case the loader
+        # writes nothing and the network is called without the tensor.
+        F_after = py.DataLoader.placement_afterstate_size()
+        self._pl_a_afterstate = np.zeros(B * N * F_after, dtype=np.float32)
+        self._pl_afterstate_size = F_after
         self._pl_n_max = N
         self._pl_preview_size = prev
 
@@ -83,7 +89,7 @@ class MinizeroDadaLoader:
             self._pl_b2b, self._pl_garbage,
             self._pl_a_use_hold, self._pl_a_lock_x, self._pl_a_lock_y,
             self._pl_a_orient, self._pl_a_spin, self._pl_a_piece, self._pl_a_lines,
-            self._pl_a_mask, N, prev)
+            self._pl_a_mask, self._pl_a_afterstate, N, prev, self._pl_afterstate_size)
 
         # Trim N down to the real max valid placements in this batch. Attention
         # memory scales with seq_len^2 so this can easily reduce GPU mem ~10x
@@ -118,6 +124,11 @@ class MinizeroDadaLoader:
             "a_piece": t2(self._pl_a_piece),
             "a_lines": t2(self._pl_a_lines),
             "a_mask": t2(self._pl_a_mask),
+            # None keeps the network on its no-afterstate path; see
+            # ActionTokenEmbed.forward in placement_transformer_network.py.
+            "a_afterstate": (torch.from_numpy(
+                self._pl_a_afterstate.reshape(B, N, self._pl_afterstate_size)[:, :Nr, :].copy()).to(device)
+                if self._pl_afterstate_size > 0 else None),
         }
         policy = torch.FloatTensor(self.policy.reshape(B, N)[:, :Nr].copy()).to(device)
         value = torch.FloatTensor(self.value).view(B, py.get_nn_discrete_value_size()).to(device)
@@ -176,6 +187,7 @@ class Model:
                 "mlp_ratio": py.get_nn_placement_mlp_ratio(),
                 "dropout": py.get_nn_placement_dropout(),
                 "backbone": py.get_nn_placement_backbone(),
+                "afterstate_feature_size": py.DataLoader.placement_afterstate_size(),
             }
         self.network = create_network(py.get_game_name(),
                                       py.get_nn_num_input_channels(),
@@ -292,7 +304,7 @@ def train(model, training_dir, data_loader, start_iter, end_iter):
                                            batch["combo"], batch["b2b"], batch["garbage"],
                                            batch["a_use_hold"], batch["a_lock_x"], batch["a_lock_y"],
                                            batch["a_orient"], batch["a_spin"], batch["a_piece"],
-                                           batch["a_lines"], batch["a_mask"])
+                                           batch["a_lines"], batch["a_mask"], batch["a_afterstate"])
             # Policy loss on valid (unmasked) positions only, via KL from label -> predicted log-softmax.
             logits = network_output["policy_logit"]  # [B, N], padded = -1e9
             log_probs = nn.functional.log_softmax(logits, dim=1)

@@ -3,6 +3,7 @@
 #include "engine/placement_search.hpp"
 #include "engine/step.hpp"
 #include "stochastic_env.h"
+#include <array>
 #include <cmath>
 #include <string>
 #include <vector>
@@ -23,6 +24,34 @@ struct PlacementGlobalFeatures {
     int pending_garbage;
 };
 
+// --- Afterstate summary attached to every placement -------------------------
+//
+// The action token otherwise describes a placement only by what it IS
+// (piece / orientation / lock position), never by what the board LOOKS LIKE
+// once the piece has locked. Recovering that from the board tokens is a tall
+// order for the policy head: the board reaches it as a handful of coarse
+// patches, so per-column detail at the lock site is mostly gone.
+//
+// engine::PlacementSearchResult::final_state already holds the exact locked
+// board (post line-clear), and rebuildLegalPlacements() has it cached, so this
+// summary costs one O(W*H) scan per placement on data that is already in hand.
+//
+// Layout (all values scaled into [-1, 1] here, not in the network):
+//   [0, W)   normalized column heights of the locked board
+//   [W + 0]  holes
+//   [W + 1]  delta holes vs. the pre-placement board
+//   [W + 2]  bumpiness (sum of adjacent column height differences)
+//   [W + 3]  aggregate height
+//   [W + 4]  max column height
+//   [W + 5]  row transitions
+//   [W + 6]  column transitions
+//   [W + 7]  cumulative well depth
+//   [W + 8]  delta max column height vs. the pre-placement board
+//   [W + 9]  1 if this placement tops out, else 0
+constexpr int kPlacementAfterstateColumnCount = engine::BOARD_RIGHT - engine::BOARD_LEFT + 1;
+constexpr int kPlacementAfterstateScalarCount = 10;
+constexpr int kPlacementAfterstateFeatureSize = kPlacementAfterstateColumnCount + kPlacementAfterstateScalarCount;
+
 struct PlacementActionDescriptor {
     int action_id;
     bool use_hold;
@@ -32,6 +61,9 @@ struct PlacementActionDescriptor {
     int spin_type;     // 0..2
     int piece_type;    // 0..6
     int lines_cleared; // 0..4
+    // All-zero unless config::nn_placement_use_afterstate_feature is set; see
+    // ModernTetrisPlacementEnv::getAfterstateFeatureSize().
+    std::array<float, kPlacementAfterstateFeatureSize> afterstate{};
 };
 
 constexpr char kModernTetrisPlacementName[] = "moderntetris_placement";
@@ -148,6 +180,11 @@ public:
     std::vector<float> getBoardFeatures() const; // size = C_board * H * W, C_board = 1
     PlacementGlobalFeatures getGlobalFeatures() const;
     std::vector<PlacementActionDescriptor> getActionDescriptors() const; // aligned with getLegalActions() order
+    // kPlacementAfterstateFeatureSize when the afterstate summary is enabled,
+    // 0 when it is off. Consumers use it both to size their buffers and to
+    // decide whether to hand the tensor to the network at all, which keeps the
+    // disabled arm on the original TorchScript forward signature.
+    static int getAfterstateFeatureSize();
     int getBoardChannels() const { return kPlacementBoardChannels; }
 
     // Raw engine state. The data loader's verify-then-mirror augmentation uses

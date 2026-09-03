@@ -51,6 +51,7 @@ def create_network(game_name="tietactoe",
                 dropout=cfg.get("dropout", 0.1),
                 num_value_hidden_channels=num_value_hidden_channels,
                 discrete_value_size=discrete_value_size,
+                afterstate_feature_size=cfg.get("afterstate_feature_size", 0),
             )
         else:
             network = PlacementTransformerNetwork(
@@ -68,6 +69,7 @@ def create_network(game_name="tietactoe",
                 dropout=cfg.get("dropout", 0.1),
                 num_value_hidden_channels=num_value_hidden_channels,
                 discrete_value_size=discrete_value_size,
+                afterstate_feature_size=cfg.get("afterstate_feature_size", 0),
             )
     elif network_type_name == "muzero":
         if "atari" in game_name:

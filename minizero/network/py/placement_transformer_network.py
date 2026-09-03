@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Dict
+from typing import Dict, Optional
 
 
 # --- Lock-position coordinate range -----------------------------------------
@@ -139,7 +139,8 @@ class ActionTokenEmbed(nn.Module):
     def __init__(self, board_height: int, board_width: int,
                  num_piece_types: int, d_model: int,
                  num_orientations: int = 4, num_spin_types: int = 3,
-                 max_lines_cleared: int = 5):
+                 max_lines_cleared: int = 5,
+                 afterstate_feature_size: int = 0):
         super().__init__()
         self.board_height = board_height
         self.board_width = board_width
@@ -157,13 +158,28 @@ class ActionTokenEmbed(nn.Module):
         self.lock_pos_embed = nn.Parameter(torch.zeros(1, self.lock_grid_h * self.lock_grid_w, d_model))
         self.type_embed = nn.Parameter(torch.zeros(1, 1, d_model))
         self.mix = nn.Linear(d_model * 5, d_model)
+        # Optional projection of the afterstate summary (see
+        # kPlacementAfterstateFeatureSize on the C++ side). It lives in a
+        # ModuleList so the disabled variant contributes no parameters at all
+        # -- an empty list keeps the state_dict identical to a network built
+        # before this feature existed, while TorchScript can still compile the
+        # forward by iterating the list instead of branching on a module that
+        # may not be there.
+        self.afterstate_proj = nn.ModuleList()
+        if afterstate_feature_size > 0:
+            self.afterstate_proj.append(nn.Sequential(
+                nn.Linear(afterstate_feature_size, d_model),
+                nn.GELU(),
+                nn.Linear(d_model, d_model),
+            ))
         nn.init.trunc_normal_(self.lock_pos_embed, std=0.02)
         nn.init.trunc_normal_(self.type_embed, std=0.02)
 
     def forward(self, use_hold: torch.Tensor, lock_x: torch.Tensor, lock_y: torch.Tensor,
                 orientation: torch.Tensor, spin_type: torch.Tensor,
-                piece_type: torch.Tensor, lines_cleared: torch.Tensor) -> torch.Tensor:
-        # all shape [B, N] long
+                piece_type: torch.Tensor, lines_cleared: torch.Tensor,
+                afterstate: Optional[torch.Tensor] = None) -> torch.Tensor:
+        # all shape [B, N] long, except afterstate: [B, N, F] float
         feats = torch.cat([
             self.use_hold_embed(use_hold),
             self.orient_embed(orientation),
@@ -172,6 +188,10 @@ class ActionTokenEmbed(nn.Module):
             self.lines_cleared_embed(lines_cleared),
         ], dim=-1)                                                                    # [B, N, 5d]
         x = self.mix(feats)                                                           # [B, N, d]
+        if afterstate is not None:
+            a = afterstate
+            for proj in self.afterstate_proj:
+                x = x + proj(a)                                                       # [B, N, d]
         # Shift the anchor into the widened grid. The clamps are a safety net for
         # padded slots / unexpected descriptors; real placements never trigger them.
         iy = (lock_y + self.lock_y_offset).clamp(0, self.lock_grid_h - 1)
@@ -202,7 +222,8 @@ class PlacementTransformerNetwork(nn.Module):
                  mlp_ratio: int = 4,
                  dropout: float = 0.1,
                  num_value_hidden_channels: int = 256,
-                 discrete_value_size: int = 601):
+                 discrete_value_size: int = 601,
+                 afterstate_feature_size: int = 0):
         super().__init__()
         self.game_name = game_name
         self.board_channels = board_channels
@@ -215,6 +236,7 @@ class PlacementTransformerNetwork(nn.Module):
         self.n_heads = n_heads
         self.n_layers = n_layers
         self.discrete_value_size = discrete_value_size
+        self.afterstate_feature_size = afterstate_feature_size
 
         self.patch_embed = BoardPatchEmbed(board_channels, board_height, board_width,
                                            patch_size, d_model)
@@ -222,7 +244,8 @@ class PlacementTransformerNetwork(nn.Module):
         self.piece_state_embed = PieceStateEmbed(d_model)
         self.meta_embed = MetaEmbed(d_model)
         self.action_embed = ActionTokenEmbed(board_height, board_width,
-                                             num_piece_types, d_model)
+                                             num_piece_types, d_model,
+                                             afterstate_feature_size=afterstate_feature_size)
         self.value_token = nn.Parameter(torch.zeros(1, 1, d_model))
         nn.init.trunc_normal_(self.value_token, std=0.02)
 
@@ -296,7 +319,8 @@ class PlacementTransformerNetwork(nn.Module):
                 action_spin_type: torch.Tensor,
                 action_piece_type: torch.Tensor,
                 action_lines_cleared: torch.Tensor,
-                action_mask: torch.Tensor) -> Dict[str, torch.Tensor]:
+                action_mask: torch.Tensor,
+                action_afterstate: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
         """
         Shapes:
           board               [B, C_board, H, W]  float
@@ -311,6 +335,8 @@ class PlacementTransformerNetwork(nn.Module):
           pending_garbage     [B]                 float (normalized)
           action_* (all):     [B, N_max]          long
           action_mask:        [B, N_max]          bool/uint8 (True = padding, ignored)
+          action_afterstate:  [B, N_max, F]       float, or None when the
+                                                  afterstate feature is disabled
         """
         B = board.shape[0]
 
@@ -321,7 +347,8 @@ class PlacementTransformerNetwork(nn.Module):
         value_tok = self.value_token.expand(B, -1, -1)                                # [B, 1, d]
         actions_pre = self.action_embed(action_use_hold, action_lock_x, action_lock_y,
                                         action_orientation, action_spin_type,
-                                        action_piece_type, action_lines_cleared)      # [B, N_max, d]
+                                        action_piece_type, action_lines_cleared,
+                                        action_afterstate)                            # [B, N_max, d]
 
         seq = torch.cat([patches, queue, piece_state, meta, value_tok, actions_pre], dim=1)
 

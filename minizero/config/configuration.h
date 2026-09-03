@@ -79,6 +79,7 @@ extern int nn_placement_n_heads;
 extern int nn_placement_mlp_ratio;
 extern float nn_placement_dropout;
 extern std::string nn_placement_backbone;
+extern bool nn_placement_use_afterstate_feature;
 
 // environment parameters
 extern int env_board_size;

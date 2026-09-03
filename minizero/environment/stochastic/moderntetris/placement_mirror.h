@@ -2,6 +2,7 @@
 
 #include "engine/tetris.hpp"
 #include <cstdint>
+#include <utility>
 
 namespace minizero::env::moderntetris_placement::mirror {
 
@@ -77,6 +78,16 @@ inline MirrorPlacementResult mirrorPlacement(int piece_type, int orientation, in
         static_cast<int>(e.mirror_orient),
         mirror_engine_x - engine::BOARD_LEFT,
     };
+}
+
+// Mirror a placement's afterstate feature vector in place. Only the leading
+// per-column height block flips; every scalar after it (holes, bumpiness,
+// transitions, wells, top-out) is invariant under a horizontal mirror.
+inline void mirrorAfterstateFeatures(float* feature, int column_count)
+{
+    for (int c = 0; c < column_count / 2; ++c) {
+        std::swap(feature[c], feature[column_count - 1 - c]);
+    }
 }
 
 // Mirror one engine row (16 cells, 2 bits each). Cell at column c moves to

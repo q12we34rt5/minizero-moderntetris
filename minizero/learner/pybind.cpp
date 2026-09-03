@@ -4,6 +4,9 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <string>
+#if MODERNTETRIS_PLACEMENT
+#include "moderntetris_placement.h"
+#endif
 
 namespace py = pybind11;
 using namespace minizero;
@@ -65,6 +68,7 @@ PYBIND11_MODULE(minizero_py, m)
     m.def("get_nn_placement_mlp_ratio", []() { return config::nn_placement_mlp_ratio; });
     m.def("get_nn_placement_dropout", []() { return config::nn_placement_dropout; });
     m.def("get_nn_placement_backbone", []() { return config::nn_placement_backbone; });
+    m.def("get_nn_placement_use_afterstate_feature", []() { return config::nn_placement_use_afterstate_feature; });
     m.def("get_env_modern_tetris_num_preview_piece", []() { return config::env_modern_tetris_num_preview_piece; });
 
     py::class_<learner::DataLoader>(m, "DataLoader")
@@ -89,8 +93,12 @@ PYBIND11_MODULE(minizero_py, m)
 #if MODERNTETRIS_PLACEMENT
         // Mirrors network::kPlacementActionUpperBound (kept inline to avoid dragging torch into pybind TU).
         .def("placement_n_max", []() { return 256; })
+        // Per-action afterstate feature width, 0 when the feature is disabled.
+        // train.py uses it both to size its buffer and to decide whether to hand
+        // the tensor to the network.
+        .def("placement_afterstate_size", []() { return env::moderntetris_placement::ModernTetrisPlacementEnv::getAfterstateFeatureSize(); })
         .def(
-            "sample_data_placement", [](learner::DataLoader& dl, py::array_t<float>& board, py::array_t<float>& policy, py::array_t<float>& value, py::array_t<float>& loss_scale, py::array_t<int>& sampled_index, py::array_t<int64_t>& current_piece, py::array_t<int64_t>& hold_piece, py::array_t<float>& has_held, py::array_t<int64_t>& preview, py::array_t<float>& was_rotation, py::array_t<int64_t>& srs_index, py::array_t<float>& combo, py::array_t<float>& back_to_back, py::array_t<float>& garbage, py::array_t<int64_t>& a_use_hold, py::array_t<int64_t>& a_lock_x, py::array_t<int64_t>& a_lock_y, py::array_t<int64_t>& a_orientation, py::array_t<int64_t>& a_spin, py::array_t<int64_t>& a_piece, py::array_t<int64_t>& a_lines, py::array_t<uint8_t>& a_mask, int n_max, int preview_size) {
+            "sample_data_placement", [](learner::DataLoader& dl, py::array_t<float>& board, py::array_t<float>& policy, py::array_t<float>& value, py::array_t<float>& loss_scale, py::array_t<int>& sampled_index, py::array_t<int64_t>& current_piece, py::array_t<int64_t>& hold_piece, py::array_t<float>& has_held, py::array_t<int64_t>& preview, py::array_t<float>& was_rotation, py::array_t<int64_t>& srs_index, py::array_t<float>& combo, py::array_t<float>& back_to_back, py::array_t<float>& garbage, py::array_t<int64_t>& a_use_hold, py::array_t<int64_t>& a_lock_x, py::array_t<int64_t>& a_lock_y, py::array_t<int64_t>& a_orientation, py::array_t<int64_t>& a_spin, py::array_t<int64_t>& a_piece, py::array_t<int64_t>& a_lines, py::array_t<uint8_t>& a_mask, py::array_t<float>& a_afterstate, int n_max, int preview_size, int afterstate_size) {
                 auto dp = dl.getSharedData()->getDataPtr();
                 dp->features_ = static_cast<float*>(board.request().ptr);
                 dp->policy_ = static_cast<float*>(policy.request().ptr);
@@ -114,8 +122,10 @@ PYBIND11_MODULE(minizero_py, m)
                 dp->placement_action_piece_type_ = static_cast<int64_t*>(a_piece.request().ptr);
                 dp->placement_action_lines_cleared_ = static_cast<int64_t*>(a_lines.request().ptr);
                 dp->placement_action_mask_ = static_cast<uint8_t*>(a_mask.request().ptr);
+                dp->placement_action_afterstate_ = (afterstate_size > 0) ? static_cast<float*>(a_afterstate.request().ptr) : nullptr;
                 dp->placement_n_max_ = n_max;
                 dp->placement_preview_size_ = preview_size;
+                dp->placement_afterstate_size_ = (dp->placement_action_afterstate_ != nullptr) ? afterstate_size : 0;
                 dl.sampleData(); }, py::call_guard<py::gil_scoped_release>())
 #endif
         ;

@@ -77,6 +77,7 @@ int nn_placement_n_heads = 6;
 int nn_placement_mlp_ratio = 4;
 float nn_placement_dropout = 0.1f;
 std::string nn_placement_backbone = "transformer";
+bool nn_placement_use_afterstate_feature = false;
 
 // environment parameters
 int env_board_size = 0;
@@ -205,6 +206,7 @@ void setConfiguration(ConfigureLoader& cl)
     cl.addParameter("nn_placement_mlp_ratio", nn_placement_mlp_ratio, "placement transformer: FFN expansion ratio", "Network");
     cl.addParameter("nn_placement_dropout", nn_placement_dropout, "placement transformer: dropout", "Network");
     cl.addParameter("nn_placement_backbone", nn_placement_backbone, "placement backbone: transformer/mlp_flat/mlp_conv (mlp_* score each action independently)", "Network");
+    cl.addParameter("nn_placement_use_afterstate_feature", nn_placement_use_afterstate_feature, "placement: attach a summary of the board AFTER each placement (column heights, holes, transitions, wells, top-out) to its action token", "Network");
 
     // environment parameters
     cl.addParameter("env_board_size", env_board_size, "the size of board", "Environment");

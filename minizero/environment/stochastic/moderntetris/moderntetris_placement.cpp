@@ -16,6 +16,21 @@ namespace minizero::env::moderntetris_placement {
 
 using namespace minizero::utils;
 
+// Shape summary of the VISIBLE playfield, computed once for the pre-placement
+// board and once per candidate afterstate. Only ever used inside this file --
+// it sits out here rather than in the anonymous namespace below because that
+// block is indented, and cpplint rejects an indented type declaration.
+struct BoardStats {
+    std::array<int, kPlacementAfterstateColumnCount> height{}; // 0 == empty column
+    int holes = 0;
+    int bumpiness = 0;
+    int aggregate_height = 0;
+    int max_height = 0;
+    int row_transitions = 0;
+    int column_transitions = 0;
+    int cumulative_wells = 0;
+};
+
 namespace {
 
     constexpr int kVisibleCellCount = kModernTetrisPlacementBoardWidth * kModernTetrisPlacementBoardHeight;
@@ -28,6 +43,109 @@ namespace {
         seed ^= seed >> 17;
         seed ^= seed << 5;
         return seed;
+    }
+
+    inline bool isCellOccupied(const engine::Board& board, int local_x, int local_y)
+    {
+        return engine::ops::getCell(board, local_x + engine::BOARD_LEFT, local_y + engine::BOARD_TOP) != engine::Cell::EMPTY;
+    }
+
+    BoardStats computeBoardStats(const engine::Board& board)
+    {
+        constexpr int W = kModernTetrisPlacementBoardWidth;
+        constexpr int H = kModernTetrisPlacementBoardHeight;
+        BoardStats st;
+        bool occ[H][W];
+        for (int y = 0; y < H; ++y) {
+            for (int x = 0; x < W; ++x) { occ[y][x] = isCellOccupied(board, x, y); }
+        }
+
+        for (int x = 0; x < W; ++x) {
+            int top = H; // local_y of the topmost occupied cell, H when the column is empty
+            for (int y = 0; y < H; ++y) {
+                if (occ[y][x]) {
+                    top = y;
+                    break;
+                }
+            }
+            st.height[x] = H - top;
+            for (int y = top + 1; y < H; ++y) {
+                if (!occ[y][x]) { ++st.holes; }
+            }
+            st.aggregate_height += st.height[x];
+            st.max_height = std::max(st.max_height, st.height[x]);
+        }
+        for (int x = 0; x + 1 < W; ++x) { st.bumpiness += std::abs(st.height[x] - st.height[x + 1]); }
+
+        // Row transitions, side walls counted as occupied. Fully empty rows are
+        // skipped: each would contribute a constant 2, turning the feature into a
+        // proxy for stack height that max_height already carries.
+        for (int y = 0; y < H; ++y) {
+            bool row_empty = true;
+            for (int x = 0; x < W; ++x) {
+                if (occ[y][x]) {
+                    row_empty = false;
+                    break;
+                }
+            }
+            if (row_empty) { continue; }
+            bool prev = true; // left wall
+            for (int x = 0; x < W; ++x) {
+                if (occ[y][x] != prev) { ++st.row_transitions; }
+                prev = occ[y][x];
+            }
+            if (!prev) { ++st.row_transitions; } // right wall
+        }
+
+        // Column transitions, floor counted as occupied, above-board as empty.
+        for (int x = 0; x < W; ++x) {
+            bool prev = false;
+            for (int y = 0; y < H; ++y) {
+                if (occ[y][x] != prev) { ++st.column_transitions; }
+                prev = occ[y][x];
+            }
+            if (!prev) { ++st.column_transitions; } // floor
+        }
+
+        // Cumulative wells: an empty cell walled in on both sides adds its depth
+        // within the current vertical run, so a run of L contributes L(L+1)/2.
+        for (int x = 0; x < W; ++x) {
+            int run = 0;
+            for (int y = 0; y < H; ++y) {
+                const bool left = (x == 0) || occ[y][x - 1];
+                const bool right = (x == W - 1) || occ[y][x + 1];
+                if (!occ[y][x] && left && right) {
+                    ++run;
+                    st.cumulative_wells += run;
+                } else {
+                    run = 0;
+                }
+            }
+        }
+        return st;
+    }
+
+    // Scale everything into [-1, 1] here rather than in the network, so the
+    // self-play and training paths cannot disagree about normalization.
+    // The divisors are loose upper bounds on what a 20x10 playfield produces;
+    // the clamps only bite on pathological boards.
+    void fillAfterstateFeatures(const BoardStats& before, const BoardStats& after, bool tops_out,
+                                std::array<float, kPlacementAfterstateFeatureSize>& out)
+    {
+        constexpr int W = kPlacementAfterstateColumnCount;
+        constexpr float H = static_cast<float>(kModernTetrisPlacementBoardHeight);
+        auto unit = [](float v) { return std::clamp(v, -1.0f, 1.0f); };
+        for (int x = 0; x < W; ++x) { out[x] = after.height[x] / H; }
+        out[W + 0] = unit(after.holes / 40.0f);
+        out[W + 1] = unit((after.holes - before.holes) / 4.0f);
+        out[W + 2] = unit(after.bumpiness / 40.0f);
+        out[W + 3] = unit(after.aggregate_height / (W * H));
+        out[W + 4] = after.max_height / H;
+        out[W + 5] = unit(after.row_transitions / (H * (W + 1)));
+        out[W + 6] = unit(after.column_transitions / (W * (H + 1)));
+        out[W + 7] = unit(after.cumulative_wells / 100.0f);
+        out[W + 8] = unit((after.max_height - before.max_height) / 4.0f);
+        out[W + 9] = tops_out ? 1.0f : 0.0f;
     }
 
 } // namespace
@@ -412,6 +530,9 @@ PlacementGlobalFeatures ModernTetrisPlacementEnv::getGlobalFeatures() const
 std::vector<PlacementActionDescriptor> ModernTetrisPlacementEnv::getActionDescriptors() const
 {
     rebuildLegalPlacements();
+    const int afterstate_size = getAfterstateFeatureSize();
+    BoardStats before;
+    if (afterstate_size > 0) { before = computeBoardStats(ctx_.state.board); }
     std::vector<PlacementActionDescriptor> descs;
     descs.reserve(cached_placements_.size());
     for (const auto& cp : cached_placements_) {
@@ -437,9 +558,21 @@ std::vector<PlacementActionDescriptor> ModernTetrisPlacementEnv::getActionDescri
         const int pt_idx = toPieceIndex(piece_type);
         d.piece_type = (pt_idx >= 0 && pt_idx < 7) ? pt_idx : 0;
         d.lines_cleared = static_cast<int>(cp.result.final_state.lines_cleared);
+        if (afterstate_size > 0) {
+            // final_state is the board right after this placement locked and its
+            // lines cleared, with the next piece already spawned -- so a failed
+            // spawn (is_alive == false) is exactly "this placement tops out".
+            fillAfterstateFeatures(before, computeBoardStats(cp.result.final_state.board),
+                                   !cp.result.final_state.is_alive, d.afterstate);
+        }
         descs.push_back(d);
     }
     return descs;
+}
+
+int ModernTetrisPlacementEnv::getAfterstateFeatureSize()
+{
+    return config::nn_placement_use_afterstate_feature ? kPlacementAfterstateFeatureSize : 0;
 }
 
 // --- Helpers ---

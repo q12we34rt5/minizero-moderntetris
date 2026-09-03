@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 try:
     from .placement_transformer_network import LOCK_X_OFFSET, LOCK_Y_OFFSET, lock_grid_size
@@ -85,7 +85,8 @@ class PlacementMLPNetwork(nn.Module):
                  conv_hidden_channels: int = 32,
                  num_conv_layers: int = 3,
                  num_value_hidden_channels: int = 256,
-                 discrete_value_size: int = 601):
+                 discrete_value_size: int = 601,
+                 afterstate_feature_size: int = 0):
         super().__init__()
         assert board_encoder in ("flat", "conv"), board_encoder
         self.game_name = game_name
@@ -129,6 +130,18 @@ class PlacementMLPNetwork(nn.Module):
         action_feat_dim = (2 + self.lock_x_size + self.lock_y_size + 4 + 3
                            + num_piece_types + 5)
         self.action_proj = nn.Linear(action_feat_dim, d_model)
+        # Optional afterstate summary, added onto the action embedding. Held in a
+        # ModuleList for the same reason as in the transformer backbone: the
+        # disabled variant then has no extra parameters and TorchScript still
+        # compiles the forward. See ActionTokenEmbed in
+        # placement_transformer_network.py.
+        self.afterstate_proj = nn.ModuleList()
+        if afterstate_feature_size > 0:
+            self.afterstate_proj.append(nn.Sequential(
+                nn.Linear(afterstate_feature_size, d_model),
+                nn.GELU(),
+                nn.Linear(d_model, d_model),
+            ))
 
         # --- deep policy MLP over [state_h, action_h] -> per-action logit ---
         hidden = d_model * hidden_ratio
@@ -193,8 +206,9 @@ class PlacementMLPNetwork(nn.Module):
                   action_orientation: torch.Tensor,
                   action_spin_type: torch.Tensor,
                   action_piece_type: torch.Tensor,
-                  action_lines_cleared: torch.Tensor) -> torch.Tensor:
-        # all [B, N] long
+                  action_lines_cleared: torch.Tensor,
+                  action_afterstate: Optional[torch.Tensor] = None) -> torch.Tensor:
+        # all [B, N] long, except action_afterstate: [B, N, F] float
         dt = self.action_proj.weight.dtype
         # Shift the bounding-box anchor into the widened one-hot range: lock_x can be
         # as low as -2 (left-wall hugging shapes) and lock_y as low as -9 (hidden
@@ -212,7 +226,12 @@ class PlacementMLPNetwork(nn.Module):
             F.one_hot(action_piece_type, self.num_piece_types).to(dt),
             F.one_hot(action_lines_cleared, 5).to(dt),
         ], dim=-1)                                                                    # [B, N, action_feat_dim]
-        return self.action_proj(feat)                                                # [B, N, d]
+        h = self.action_proj(feat)                                                   # [B, N, d]
+        if action_afterstate is not None:
+            a = action_afterstate
+            for proj in self.afterstate_proj:
+                h = h + proj(a)
+        return h
 
     def _value_from_state(self, state_h: torch.Tensor) -> Dict[str, torch.Tensor]:
         if self.discrete_value_size == 1:
@@ -241,7 +260,8 @@ class PlacementMLPNetwork(nn.Module):
                 action_spin_type: torch.Tensor,
                 action_piece_type: torch.Tensor,
                 action_lines_cleared: torch.Tensor,
-                action_mask: torch.Tensor) -> Dict[str, torch.Tensor]:
+                action_mask: torch.Tensor,
+                action_afterstate: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
         """Same shapes/contract as PlacementTransformerNetwork.forward."""
         B = board.shape[0]
         state_h = self._state_h(board, current_piece, hold_piece, has_held, preview,
@@ -249,7 +269,8 @@ class PlacementMLPNetwork(nn.Module):
                                 pending_garbage)                                      # [B, d]
         action_h = self._action_h(action_use_hold, action_lock_x, action_lock_y,
                                   action_orientation, action_spin_type,
-                                  action_piece_type, action_lines_cleared)           # [B, N, d]
+                                  action_piece_type, action_lines_cleared,
+                                  action_afterstate)                                  # [B, N, d]
         N = action_h.shape[1]
         ctx = state_h.unsqueeze(1).expand(B, N, self.d_model)                         # [B, N, d]
         pa_in = torch.cat([ctx, action_h], dim=-1)                                    # [B, N, 2d]

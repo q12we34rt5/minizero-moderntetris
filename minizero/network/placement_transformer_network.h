@@ -47,6 +47,12 @@ struct PlacementNetworkInput {
     std::vector<int> action_spin_type;
     std::vector<int> action_piece_type;
     std::vector<int> action_lines_cleared;
+    // Flattened [N, afterstate_feature_size] summary of the board after each
+    // placement. Empty, with afterstate_feature_size == 0, when the env has the
+    // feature switched off -- in that case forward() omits the tensor entirely
+    // so the TorchScript signature stays the one older models were traced with.
+    std::vector<float> action_afterstate;
+    int afterstate_feature_size = 0;
 };
 
 // Helper that builds a PlacementNetworkInput from a placement env. Templated
@@ -75,6 +81,8 @@ inline PlacementNetworkInput buildPlacementNetworkInput(const Env& env,
     in.garbage_scaled = std::clamp(g.pending_garbage / 20.0f, 0.0f, 1.0f);
     auto descs = env.getActionDescriptors();
     const size_t n = descs.size();
+    in.afterstate_feature_size = env.getAfterstateFeatureSize();
+    if (in.afterstate_feature_size > 0) { in.action_afterstate.reserve(n * in.afterstate_feature_size); }
     in.action_use_hold.reserve(n);
     in.action_lock_x.reserve(n);
     in.action_lock_y.reserve(n);
@@ -90,6 +98,11 @@ inline PlacementNetworkInput buildPlacementNetworkInput(const Env& env,
         in.action_spin_type.push_back(d.spin_type);
         in.action_piece_type.push_back(d.piece_type);
         in.action_lines_cleared.push_back(d.lines_cleared);
+        if (in.afterstate_feature_size > 0) {
+            in.action_afterstate.insert(in.action_afterstate.end(),
+                                        d.afterstate.begin(),
+                                        d.afterstate.begin() + in.afterstate_feature_size);
+        }
     }
     return in;
 }
@@ -183,6 +196,7 @@ public:
         const int C = batch_inputs_.front().board_channels;
         const int H = batch_inputs_.front().board_height;
         const int W = batch_inputs_.front().board_width;
+        const int F = batch_inputs_.front().afterstate_feature_size;
 
         // Build per-batch tensors. Allocate flat backing storage then from_blob.
         std::vector<float> board_buf(B * C * H * W, 0.0f);
@@ -203,6 +217,7 @@ public:
         std::vector<int64_t> a_piece_buf(B * n_max, 0);
         std::vector<int64_t> a_clear_buf(B * n_max, 0);
         std::vector<uint8_t> action_mask_buf(B * n_max, 1); // default = padded
+        std::vector<float> a_afterstate_buf(F > 0 ? static_cast<size_t>(B) * n_max * F : 0, 0.0f);
 
         auto normalizePieceIndex = [](int p) -> int64_t {
             if (p < 0 || p >= kPlacementNonePieceIndex) { return kPlacementNonePieceIndex; }
@@ -238,6 +253,11 @@ public:
                 a_piece_buf[off] = in.action_piece_type[a];
                 a_clear_buf[off] = in.action_lines_cleared[a];
                 action_mask_buf[off] = 0; // valid
+            }
+            if (F > 0) {
+                assert(static_cast<int>(in.afterstate_feature_size) == F);
+                std::copy(in.action_afterstate.begin(), in.action_afterstate.end(),
+                          a_afterstate_buf.begin() + static_cast<size_t>(i) * n_max * F);
             }
         }
 
@@ -285,6 +305,10 @@ public:
             a_clear_t.to(dev),
             mask_t.to(dev),
         };
+        if (F > 0) {
+            auto a_afterstate_t = torch::from_blob(a_afterstate_buf.data(), {B, n_max, F}, opts_float).clone();
+            args.push_back(a_afterstate_t.to(dev));
+        }
 
         auto result = network_.forward(args).toGenericDict();
         auto policy_output = result.at("policy").toTensor().to(at::kCPU).contiguous();

@@ -51,8 +51,12 @@ public:
     int64_t* placement_action_piece_type_ = nullptr;
     int64_t* placement_action_lines_cleared_ = nullptr;
     uint8_t* placement_action_mask_ = nullptr; // [B * N_max], 1 = padded
+    // [B * N_max * placement_afterstate_size_]; unused (and sized 0) when
+    // config::nn_placement_use_afterstate_feature is off.
+    float* placement_action_afterstate_ = nullptr;
     int placement_n_max_ = 256;
     int placement_preview_size_ = 5;
+    int placement_afterstate_size_ = 0;
 #endif
 };
 

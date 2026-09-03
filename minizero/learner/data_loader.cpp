@@ -355,6 +355,7 @@ void DataLoaderThread::setPlacementTrainingData(int batch_index)
     auto dp = getSharedData()->getDataPtr();
     const int N_max = dp->placement_n_max_;
     const int preview_size = dp->placement_preview_size_;
+    const int afterstate_size = dp->placement_afterstate_size_;
 
     // Per-action numpy buffers are sized [B, N_max]. Writing i in [0, N) with
     // N > N_max would stomp the next batch slot (silent corruption). Fail loud
@@ -408,6 +409,10 @@ void DataLoaderThread::setPlacementTrainingData(int batch_index)
         dp->placement_action_piece_type_[action_base + i] = d.piece_type;
         dp->placement_action_lines_cleared_[action_base + i] = d.lines_cleared;
         dp->placement_action_mask_[action_base + i] = 0; // valid
+        if (afterstate_size > 0) {
+            std::copy(d.afterstate.begin(), d.afterstate.begin() + afterstate_size,
+                      dp->placement_action_afterstate_ + static_cast<size_t>(action_base + i) * afterstate_size);
+        }
         const float w = (d.action_id >= 0 && d.action_id < static_cast<int>(dense_policy.size())) ? dense_policy[d.action_id] : 0.0f;
         dp->policy_[action_base + i] = w;
         pi_sum += w;
@@ -425,6 +430,10 @@ void DataLoaderThread::setPlacementTrainingData(int batch_index)
         dp->placement_action_lines_cleared_[action_base + i] = 0;
         dp->placement_action_mask_[action_base + i] = 1; // padded
         dp->policy_[action_base + i] = 0.0f;
+        if (afterstate_size > 0) {
+            std::fill_n(dp->placement_action_afterstate_ + static_cast<size_t>(action_base + i) * afterstate_size,
+                        afterstate_size, 0.0f);
+        }
     }
     // Strict determinism check: every non-zero entry in the SGF policy must
     // correspond to a legal placement in the replayed env. If any SGF non-zero
@@ -548,6 +557,11 @@ void DataLoaderThread::setPlacementTrainingData(int batch_index)
                 dp->placement_action_piece_type_[action_base + i] = m.piece_type;
                 dp->placement_action_orientation_[action_base + i] = m.orientation;
                 dp->placement_action_lock_x_[action_base + i] = m.lock_x;
+                if (afterstate_size > 0) {
+                    mr::mirrorAfterstateFeatures(
+                        dp->placement_action_afterstate_ + static_cast<size_t>(action_base + i) * afterstate_size,
+                        kPlacementAfterstateColumnCount);
+                }
             }
         }
     }
