@@ -48,6 +48,16 @@ export interface GamepadStatus {
   id: string | null;
 }
 
+/** Behavioural toggles for gamepad input (not button remapping). */
+export interface GamepadOptions {
+  /** Suppress hard drop while any other gamepad input is active (anti-misfire). */
+  blockHardDropWhileInput: boolean;
+}
+
+export const DEFAULT_GAMEPAD_OPTIONS: GamepadOptions = {
+  blockHardDropWhileInput: false,
+};
+
 const STANDARD_BUTTON_LABELS: Record<number, string> = {
   0: 'A / ✕',
   1: 'B / ○',

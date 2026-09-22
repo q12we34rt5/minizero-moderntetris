@@ -432,7 +432,18 @@ input[type='text']:focus,
   line-height: 1.5;
 }
 
-/* ===== Gamepad panel ===== */
+/* ===== Input bindings panel (Keyboard / Gamepad tabs) ===== */
+.tab-row {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.tab-row .btn {
+  flex: 1;
+  padding: 6px 14px;
+}
+
 .gamepad-status {
   display: flex;
   align-items: center;

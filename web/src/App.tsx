@@ -1,21 +1,21 @@
 import { useState } from 'react';
-import { useGame, type GameMode, type ModelInfo } from './game/useGame.ts';
+import { useGame, type GameMode, type ModelInfo, type PveSettings } from './game/useGame.ts';
 import { BoardPanel, type BoardOverlay } from './components/BoardPanel.tsx';
 import { SettingsPanel } from './components/SettingsPanel.tsx';
 import { PveSettingsPanel } from './components/PveSettingsPanel.tsx';
-import { GamepadPanel } from './components/GamepadPanel.tsx';
+import { InputBindingsPanel } from './components/InputBindingsPanel.tsx';
+import { GAMEPAD_INPUT_LABELS, LOGICAL_INPUTS } from './input/gamepad.ts';
+import { keyLabel, type KeyboardMapping } from './input/keyboard.ts';
 
-const KEYBINDS: [string, string][] = [
-  ['←', 'Move Left'],
-  ['→', 'Move Right'],
-  ['↓', 'Soft Drop'],
-  ['Space', 'Hard Drop'],
-  ['Z', 'Rotate CCW'],
-  ['↑', 'Rotate CW'],
-  ['A', 'Rotate 180'],
-  ['C', 'Hold'],
-  ['R', 'Reset'],
-];
+/** Quick reference of the current keyboard bindings (+ the fixed Reset key). */
+function keybinds(mapping: KeyboardMapping): [string, string][] {
+  const rows: [string, string][] = LOGICAL_INPUTS.map((input) => [
+    keyLabel(mapping[input]),
+    GAMEPAD_INPUT_LABELS[input],
+  ]);
+  rows.push(['R', 'Reset']);
+  return rows;
+}
 
 const MODES: { id: GameMode; label: string }[] = [
   { id: 'single', label: 'Single' },
@@ -29,16 +29,16 @@ function modelLabel(models: ModelInfo[], selectedId: string, fallback: string): 
   return models.find((m) => m.id === eff)?.displayName ?? fallback;
 }
 
-function boardLabels(mode: GameMode, models: ModelInfo[], modelA: string, modelB: string): [string, string] {
-  if (mode === 'pve') return ['You', modelLabel(models, modelB, 'AI')];
-  if (mode === 'eve') return [modelLabel(models, modelA, 'AI A'), modelLabel(models, modelB, 'AI B')];
+function boardLabels(mode: GameMode, models: ModelInfo[], pve: PveSettings): [string, string] {
+  if (mode === 'pve') return ['You', modelLabel(models, pve.pveModel, 'AI')];
+  if (mode === 'eve') return [modelLabel(models, pve.eveModelA, 'AI A'), modelLabel(models, pve.eveModelB, 'AI B')];
   return ['Player', ''];
 }
 
 export default function App() {
   const game = useGame();
   const { mode, status, winner, hud, aiHud } = game;
-  const [labelA, labelB] = boardLabels(mode, game.models, game.pveSettings.modelA, game.pveSettings.modelB);
+  const [labelA, labelB] = boardLabels(mode, game.models, game.pveSettings);
   const [dump, setDump] = useState('');
 
   const onDump = () => {
@@ -116,7 +116,7 @@ export default function App() {
             <div className="panel">
               <div className="panel-title">Controls</div>
               <div className="keybinds">
-                {KEYBINDS.map(([k, desc]) => (
+                {keybinds(game.keyboardMapping).map(([k, desc]) => (
                   <Keybind key={desc} k={k} desc={desc} />
                 ))}
               </div>
@@ -128,10 +128,14 @@ export default function App() {
       <div className="bottom-bar">
         {mode !== 'eve' && <SettingsPanel settings={game.settings} onChange={game.setSettings} />}
         {mode !== 'eve' && (
-          <GamepadPanel
-            status={game.gamepadStatus}
-            mapping={game.gamepadMapping}
-            onChange={game.setGamepadMapping}
+          <InputBindingsPanel
+            gamepadStatus={game.gamepadStatus}
+            gamepadMapping={game.gamepadMapping}
+            onGamepadChange={game.setGamepadMapping}
+            gamepadOptions={game.gamepadOptions}
+            onGamepadOptionsChange={game.setGamepadOptions}
+            keyboardMapping={game.keyboardMapping}
+            onKeyboardChange={game.setKeyboardMapping}
           />
         )}
         {showAiPanel && (

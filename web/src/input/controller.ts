@@ -7,11 +7,13 @@ import {
   GamepadReader,
   HELD_INPUTS,
   type GamepadMapping,
+  type GamepadOptions,
   type GamepadStatus,
   type HeldInput,
   type InstantInput,
   type LogicalInput,
 } from './gamepad.ts';
+import { inputForKey, normalizeKey, RESET_KEY, type KeyboardMapping } from './keyboard.ts';
 
 export const Action = {
   MOVE_LEFT: 0,
@@ -72,22 +74,6 @@ const INSTANT_ACTION: Record<InstantInput, number> = {
   hold: Action.HOLD,
 };
 
-// Physical keyboard key -> logical input.
-const KEYBOARD_MAP: Record<string, LogicalInput> = {
-  ArrowLeft: 'left',
-  ArrowRight: 'right',
-  ArrowDown: 'softDrop',
-  ' ': 'hardDrop',
-  z: 'rotateCCW',
-  ArrowUp: 'rotateCW',
-  a: 'rotate180',
-  c: 'hold',
-};
-
-function normalizeKey(key: string): string {
-  return key.length === 1 ? key.toLowerCase() : key;
-}
-
 function isHeld(input: LogicalInput): input is HeldInput {
   return input === 'left' || input === 'right' || input === 'softDrop';
 }
@@ -118,6 +104,8 @@ function newHeldState(): HeldState {
 export interface InputControllerOptions {
   getSettings: () => InputSettings;
   getGamepadMapping: () => GamepadMapping;
+  getGamepadOptions: () => GamepadOptions;
+  getKeyboardMapping: () => KeyboardMapping;
   onReset?: () => void;
   onGamepadStatus?: (status: GamepadStatus) => void;
 }
@@ -125,6 +113,8 @@ export interface InputControllerOptions {
 export class InputController {
   private readonly getSettings: () => InputSettings;
   private readonly getGamepadMapping: () => GamepadMapping;
+  private readonly getGamepadOptions: () => GamepadOptions;
+  private readonly getKeyboardMapping: () => KeyboardMapping;
   private readonly onReset?: () => void;
   private readonly onGamepadStatus?: (status: GamepadStatus) => void;
 
@@ -143,6 +133,8 @@ export class InputController {
   constructor(opts: InputControllerOptions) {
     this.getSettings = opts.getSettings;
     this.getGamepadMapping = opts.getGamepadMapping;
+    this.getGamepadOptions = opts.getGamepadOptions;
+    this.getKeyboardMapping = opts.getKeyboardMapping;
     this.onReset = opts.onReset;
     this.onGamepadStatus = opts.onGamepadStatus;
   }
@@ -197,13 +189,14 @@ export class InputController {
     if (e.repeat) return;
     if (e.target instanceof HTMLElement && e.target.tagName === 'INPUT') return;
 
-    if (e.key === 'r' || e.key === 'R') {
+    const key = normalizeKey(e.key);
+    if (key === RESET_KEY) {
       e.preventDefault();
       this.onReset?.();
       return;
     }
 
-    const input = KEYBOARD_MAP[normalizeKey(e.key)];
+    const input = inputForKey(this.getKeyboardMapping(), key);
     if (!input) return;
     e.preventDefault();
     if (!this.enabled) return;
@@ -217,7 +210,7 @@ export class InputController {
 
   private onKeyUp = (e: KeyboardEvent) => {
     if (e.target instanceof HTMLElement && e.target.tagName === 'INPUT') return;
-    const input = KEYBOARD_MAP[normalizeKey(e.key)];
+    const input = inputForKey(this.getKeyboardMapping(), normalizeKey(e.key));
     if (!input) return;
     e.preventDefault();
     if (isHeld(input)) this.setHeld(input, 'kb', false, performance.now());
@@ -252,7 +245,21 @@ export class InputController {
     const raw = this.gamepad.poll(this.getGamepadMapping());
     if (!this.enabled) return;
     for (const input of HELD_INPUTS) this.setHeld(input, 'pad', raw.held[input], now);
-    for (const inst of raw.instants) this.pending.push(INSTANT_ACTION[inst]);
+
+    // Anti-misfire: optionally drop a hard drop that fires while any other
+    // gamepad input (a held direction or another button this poll) is active,
+    // so you don't accidentally slam the piece down mid-movement.
+    const blockHardDrop =
+      this.getGamepadOptions().blockHardDropWhileInput &&
+      (raw.held.left ||
+        raw.held.right ||
+        raw.held.softDrop ||
+        raw.instants.some((i) => i !== 'hardDrop'));
+
+    for (const inst of raw.instants) {
+      if (inst === 'hardDrop' && blockHardDrop) continue;
+      this.pending.push(INSTANT_ACTION[inst]);
+    }
   }
 
   /** Collect all actions for this frame: queued instants + DAS/ARR repeats + gravity. */

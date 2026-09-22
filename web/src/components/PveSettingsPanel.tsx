@@ -45,8 +45,65 @@ function ModelSelect({
   );
 }
 
+type NumKey =
+  | 'pveAiIntervalMs'
+  | 'pveGarbageDelay'
+  | 'eveAiIntervalMsA'
+  | 'eveGarbageDelayA'
+  | 'eveAiIntervalMsB'
+  | 'eveGarbageDelayB';
+
+/** One AI's timing pair (interval + garbage delay). */
+function TimingPair({
+  idBase,
+  heading,
+  interval,
+  garbage,
+  onInterval,
+  onGarbage,
+}: {
+  idBase: string;
+  heading?: string;
+  interval: number;
+  garbage: number;
+  onInterval: (v: string) => void;
+  onGarbage: (v: string) => void;
+}) {
+  return (
+    <>
+      {heading && (
+        <div className="setting-item" style={{ gridColumn: '1 / -1', marginTop: 4 }}>
+          <label>{heading}</label>
+        </div>
+      )}
+      <div className="setting-item">
+        <label htmlFor={`${idBase}-interval`}>AI Interval (ms)</label>
+        <input
+          id={`${idBase}-interval`}
+          type="number"
+          min={0}
+          max={5000}
+          value={interval}
+          onChange={(e) => onInterval(e.target.value)}
+        />
+      </div>
+      <div className="setting-item">
+        <label htmlFor={`${idBase}-garbage`}>Garbage Delay</label>
+        <input
+          id={`${idBase}-garbage`}
+          type="number"
+          min={0}
+          max={20}
+          value={garbage}
+          onChange={(e) => onGarbage(e.target.value)}
+        />
+      </div>
+    </>
+  );
+}
+
 export function PveSettingsPanel({ mode, settings, onChange, models, aiStatusA, aiStatusB, onReconnect }: Props) {
-  const updateNum = (key: 'aiIntervalMs' | 'garbageDelay', value: string) => {
+  const updateNum = (key: NumKey, value: string) => {
     const n = parseInt(value, 10);
     onChange({ ...settings, [key]: Number.isFinite(n) ? n : 0 });
   };
@@ -56,28 +113,34 @@ export function PveSettingsPanel({ mode, settings, onChange, models, aiStatusA, 
     <div className="panel" style={{ flex: 1, minWidth: 300 }}>
       <div className="panel-title">{isEve ? 'EvE / AI Backends' : 'PvE / AI Backend'}</div>
       <div className="settings-grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
-        <div className="setting-item">
-          <label htmlFor="set-ai-interval">AI Interval (ms)</label>
-          <input
-            id="set-ai-interval"
-            type="number"
-            min={0}
-            max={5000}
-            value={settings.aiIntervalMs}
-            onChange={(e) => updateNum('aiIntervalMs', e.target.value)}
+        {isEve ? (
+          <>
+            <TimingPair
+              idBase="set-eve-a"
+              heading="AI A (Board A)"
+              interval={settings.eveAiIntervalMsA}
+              garbage={settings.eveGarbageDelayA}
+              onInterval={(v) => updateNum('eveAiIntervalMsA', v)}
+              onGarbage={(v) => updateNum('eveGarbageDelayA', v)}
+            />
+            <TimingPair
+              idBase="set-eve-b"
+              heading="AI B (Board B)"
+              interval={settings.eveAiIntervalMsB}
+              garbage={settings.eveGarbageDelayB}
+              onInterval={(v) => updateNum('eveAiIntervalMsB', v)}
+              onGarbage={(v) => updateNum('eveGarbageDelayB', v)}
+            />
+          </>
+        ) : (
+          <TimingPair
+            idBase="set-pve"
+            interval={settings.pveAiIntervalMs}
+            garbage={settings.pveGarbageDelay}
+            onInterval={(v) => updateNum('pveAiIntervalMs', v)}
+            onGarbage={(v) => updateNum('pveGarbageDelay', v)}
           />
-        </div>
-        <div className="setting-item">
-          <label htmlFor="set-garbage-delay">Garbage Delay</label>
-          <input
-            id="set-garbage-delay"
-            type="number"
-            min={0}
-            max={20}
-            value={settings.garbageDelay}
-            onChange={(e) => updateNum('garbageDelay', e.target.value)}
-          />
-        </div>
+        )}
       </div>
 
       <div className="setting-item" style={{ marginTop: 8 }}>
@@ -91,22 +154,44 @@ export function PveSettingsPanel({ mode, settings, onChange, models, aiStatusA, 
         />
       </div>
 
-      {isEve && (
+      {isEve ? (
+        <>
+          <ModelSelect
+            id="set-model-a"
+            label="Board A Model"
+            value={settings.eveModelA}
+            models={models}
+            onPick={(modelId) => onChange({ ...settings, eveModelA: modelId })}
+          />
+          <ModelSelect
+            id="set-model-b"
+            label="Board B Model"
+            value={settings.eveModelB}
+            models={models}
+            onPick={(modelId) => onChange({ ...settings, eveModelB: modelId })}
+          />
+        </>
+      ) : (
         <ModelSelect
-          id="set-model-a"
-          label="Board A Model"
-          value={settings.modelA}
+          id="set-model-b"
+          label="AI Model"
+          value={settings.pveModel}
           models={models}
-          onPick={(modelId) => onChange({ ...settings, modelA: modelId })}
+          onPick={(modelId) => onChange({ ...settings, pveModel: modelId })}
         />
       )}
-      <ModelSelect
-        id="set-model-b"
-        label={isEve ? 'Board B Model' : 'AI Model'}
-        value={settings.modelB}
-        models={models}
-        onPick={(modelId) => onChange({ ...settings, modelB: modelId })}
-      />
+
+      {isEve && (
+        <div className="controls-row" style={{ marginTop: 8 }}>
+          <label htmlFor="set-eve-seed-sync">Sync seed (same start)</label>
+          <input
+            id="set-eve-seed-sync"
+            type="checkbox"
+            checked={settings.eveSeedSync}
+            onChange={(e) => onChange({ ...settings, eveSeedSync: e.target.checked })}
+          />
+        </div>
+      )}
 
       <div className="controls-row">
         {isEve && <span className={`status-chip ${aiStatusA}`}>A: {aiStatusA}</span>}
@@ -115,7 +200,11 @@ export function PveSettingsPanel({ mode, settings, onChange, models, aiStatusA, 
           Reconnect
         </button>
       </div>
-      <p className="hint">Model changes reconnect immediately; Reconnect also re-reads the model list.</p>
+      <p className="hint">
+        Switching model reconnects that board immediately. Reconnect also re-fetches
+        the model list (use it after editing the router registry).
+        {isEve && ' Seed sync takes effect on Reset: on = both boards share the piece sequence, off = independent bags.'}
+      </p>
     </div>
   );
 }

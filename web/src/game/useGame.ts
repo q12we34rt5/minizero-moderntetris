@@ -2,7 +2,14 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Engine } from '../engine/engine.ts';
 import type { GameView } from '../engine/view.ts';
 import { InputController, DEFAULT_SETTINGS, Action, type InputSettings } from '../input/controller.ts';
-import { DEFAULT_GAMEPAD_MAPPING, type GamepadMapping, type GamepadStatus } from '../input/gamepad.ts';
+import {
+  DEFAULT_GAMEPAD_MAPPING,
+  DEFAULT_GAMEPAD_OPTIONS,
+  type GamepadMapping,
+  type GamepadOptions,
+  type GamepadStatus,
+} from '../input/gamepad.ts';
+import { DEFAULT_KEYBOARD_MAPPING, type KeyboardMapping } from '../input/keyboard.ts';
 import { AiClient, type AiConnectionStatus } from '../ai/client.ts';
 import { ColorTracker } from './color-tracker.ts';
 
@@ -33,21 +40,43 @@ export interface ModelInfo {
 }
 
 export interface PveSettings {
-  aiIntervalMs: number;
-  garbageDelay: number;
   /** Base URL of the model router (ws:// or wss://). /models and /model/<id> hang off this. */
   routerUrl: string;
-  /** Selected model id per board; empty string = fall back to the first available model. */
-  modelA: string;
-  modelB: string;
+  /**
+   * Selected model ids, kept separate per mode so tweaking the PvE opponent
+   * doesn't disturb an EvE matchup (and vice versa). Empty string = fall back
+   * to the first available model.
+   */
+  pveModel: string; // PvE AI opponent (board B)
+  eveModelA: string; // EvE board A
+  eveModelB: string; // EvE board B
+  /**
+   * Per-mode timing, independent between PvE and EvE. PvE has a single AI
+   * (board B) so it keeps one pair; EvE splits timing per board (A/B) so the
+   * two AIs can run at different speeds.
+   */
+  pveAiIntervalMs: number;
+  pveGarbageDelay: number;
+  eveAiIntervalMsA: number;
+  eveGarbageDelayA: number;
+  eveAiIntervalMsB: number;
+  eveGarbageDelayB: number;
+  /** EvE only: start both boards from the same seed (identical piece sequence). */
+  eveSeedSync: boolean;
 }
 
 const DEFAULT_PVE: PveSettings = {
-  aiIntervalMs: 400,
-  garbageDelay: 1,
   routerUrl: 'ws://localhost:8000',
-  modelA: '',
-  modelB: '',
+  pveModel: '',
+  eveModelA: '',
+  eveModelB: '',
+  pveAiIntervalMs: 400,
+  pveGarbageDelay: 1,
+  eveAiIntervalMsA: 400,
+  eveGarbageDelayA: 1,
+  eveAiIntervalMsB: 400,
+  eveGarbageDelayB: 1,
+  eveSeedSync: false,
 };
 
 /** HTTP(S) base for the router's /models endpoint, derived from the ws(s):// URL. */
@@ -77,6 +106,8 @@ const SETTINGS_KEY = 'moderntetris-web-settings';
 const PVE_KEY = 'moderntetris-web-pve';
 const RULES_KEY = 'moderntetris-web-rules';
 const GAMEPAD_KEY = 'moderntetris-web-gamepad';
+const GAMEPAD_OPTS_KEY = 'moderntetris-web-gamepad-opts';
+const KEYBOARD_KEY = 'moderntetris-web-keyboard';
 
 function load<T>(key: string, fallback: T): T {
   try {
@@ -176,6 +207,10 @@ export interface UseGame {
   setRules: (r: RulesSettings) => void;
   gamepadMapping: GamepadMapping;
   setGamepadMapping: (m: GamepadMapping) => void;
+  gamepadOptions: GamepadOptions;
+  setGamepadOptions: (o: GamepadOptions) => void;
+  keyboardMapping: KeyboardMapping;
+  setKeyboardMapping: (m: KeyboardMapping) => void;
   gamepadStatus: GamepadStatus;
   seed: string;
   setSeed: (s: string) => void;
@@ -198,6 +233,8 @@ export function useGame(): UseGame {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [rules, setRulesState] = useState<RulesSettings>(() => load(RULES_KEY, DEFAULT_RULES));
   const [gamepadMapping, setGamepadMappingState] = useState<GamepadMapping>(() => load(GAMEPAD_KEY, DEFAULT_GAMEPAD_MAPPING));
+  const [gamepadOptions, setGamepadOptionsState] = useState<GamepadOptions>(() => load(GAMEPAD_OPTS_KEY, DEFAULT_GAMEPAD_OPTIONS));
+  const [keyboardMapping, setKeyboardMappingState] = useState<KeyboardMapping>(() => load(KEYBOARD_KEY, DEFAULT_KEYBOARD_MAPPING));
   const [gamepadStatus, setGamepadStatus] = useState<GamepadStatus>({ connected: false, id: null });
   const [seed, setSeedState] = useState('');
 
@@ -206,6 +243,8 @@ export function useGame(): UseGame {
   const modelsRef = useRef<ModelInfo[]>(models); // effect-side mirror of the fetched model list
   const rulesRef = useRef(rules);
   const gamepadMappingRef = useRef(gamepadMapping);
+  const gamepadOptionsRef = useRef(gamepadOptions);
+  const keyboardMappingRef = useRef(keyboardMapping);
   const modeRef = useRef(mode);
   const seedRef = useRef(seed);
   const statusRef = useRef<GameStatus>(status);
@@ -213,7 +252,7 @@ export function useGame(): UseGame {
   // Filled in by the init effect.
   const resetRef = useRef<() => void>(() => {});
   const reconnectRef = useRef<() => void>(() => {});
-  const syncRef = useRef<() => void>(() => {});
+  const syncClientsRef = useRef<() => void>(() => {}); // re-point AI boards at their selected models
   const pauseRef = useRef<() => void>(() => {});
   const dumpStateRef = useRef<() => string>(() => '');
 
@@ -239,6 +278,18 @@ export function useGame(): UseGame {
     gamepadMappingRef.current = m;
     setGamepadMappingState(m);
     save(GAMEPAD_KEY, m);
+  }, []);
+
+  const setGamepadOptions = useCallback((o: GamepadOptions) => {
+    gamepadOptionsRef.current = o;
+    setGamepadOptionsState(o);
+    save(GAMEPAD_OPTS_KEY, o);
+  }, []);
+
+  const setKeyboardMapping = useCallback((m: KeyboardMapping) => {
+    keyboardMappingRef.current = m;
+    setKeyboardMappingState(m);
+    save(KEYBOARD_KEY, m);
   }, []);
 
   const setSeed = useCallback((s: string) => {
@@ -269,8 +320,10 @@ export function useGame(): UseGame {
         if (list.length > 0) {
           const s = pveSettingsRef.current;
           const keep = (id: string) => (id === '' || list.some((m) => m.id === id) ? id : '');
-          const [a, b] = [keep(s.modelA), keep(s.modelB)];
-          if (a !== s.modelA || b !== s.modelB) setPveSettings({ ...s, modelA: a, modelB: b });
+          const [pve, a, b] = [keep(s.pveModel), keep(s.eveModelA), keep(s.eveModelB)];
+          if (pve !== s.pveModel || a !== s.eveModelA || b !== s.eveModelB) {
+            setPveSettings({ ...s, pveModel: pve, eveModelA: a, eveModelB: b });
+          }
         }
       })
       .catch(() => {
@@ -292,12 +345,15 @@ export function useGame(): UseGame {
     refreshModels();
   }, [pveSettings.routerUrl, refreshModels]);
 
-  // The list arrives after the first reset, and a model switch should take hold
-  // without waiting for a Reset -- re-sync the clients on either change. No-op
-  // before the init effect has filled syncRef in.
+  // Live-apply model switches: as soon as a board's selected model (or the
+  // router URL / mode) changes, re-point that AI board at the new /model/<id>
+  // without waiting for a Reset. The model list also arrives after the first
+  // reset, so re-sync when it does. syncClient only reconnects boards whose
+  // target URL actually changed, so unrelated tweaks (interval, garbage) don't
+  // fire it. No-op before the init effect has filled syncClientsRef in.
   useEffect(() => {
-    syncRef.current();
-  }, [models, pveSettings.modelA, pveSettings.modelB]);
+    syncClientsRef.current();
+  }, [models, mode, pveSettings.routerUrl, pveSettings.pveModel, pveSettings.eveModelA, pveSettings.eveModelB]);
 
   const setMode = useCallback((m: GameMode) => {
     modeRef.current = m;
@@ -352,9 +408,22 @@ export function useGame(): UseGame {
         board.colors.sync(board.engine.read());
       };
 
-      const garbageDelay = () => pveSettingsRef.current.garbageDelay;
+      // Timing knobs are per-mode; single has no AI so it never reads these. In
+      // EvE they're also per-board so the two AIs can differ; PvE's single pair
+      // applies to its one AI (and to garbage landing on either board).
+      const aiIntervalMs = (board: BoardRuntime) => {
+        const s = pveSettingsRef.current;
+        if (modeRef.current !== 'eve') return s.pveAiIntervalMs;
+        return board.id === 'A' ? s.eveAiIntervalMsA : s.eveAiIntervalMsB;
+      };
+      const garbageDelay = (board: BoardRuntime) => {
+        const s = pveSettingsRef.current;
+        if (modeRef.current !== 'eve') return s.pveGarbageDelay;
+        return board.id === 'A' ? s.eveGarbageDelayA : s.eveGarbageDelayB;
+      };
+      // Garbage lands on the opponent, so use the receiving board's delay.
       const sendGarbage = (lines: number, opponent: BoardRuntime) => {
-        if (lines > 0 && opponent.control !== 'none') opponent.engine.addGarbage(lines, garbageDelay());
+        if (lines > 0 && opponent.control !== 'none') opponent.engine.addGarbage(lines, garbageDelay(opponent));
       };
 
       // Request one AI placement, then play it out as an animation (see
@@ -362,7 +431,7 @@ export function useGame(): UseGame {
       const aiTick = (board: BoardRuntime, opponent: BoardRuntime, now: number) => {
         if (board.control !== 'ai' || board.client.status !== 'connected') return;
         if (board.pending || board.anim) return;
-        if (now - board.lastRequest < pveSettingsRef.current.aiIntervalMs) return;
+        if (now - board.lastRequest < aiIntervalMs(board)) return;
         board.pending = true;
         board.lastRequest = now;
         const requestGen = gen;
@@ -391,7 +460,7 @@ export function useGame(): UseGame {
             // Spread the animation over ~60% of the AI interval, capped at
             // 60ms/step. No lower bound: at AI Interval 0 this is 0ms/step, so
             // the whole path applies in one frame (effectively a snap).
-            const interval = pveSettingsRef.current.aiIntervalMs;
+            const interval = aiIntervalMs(board);
             board.anim = {
               actions: path,
               index: 0,
@@ -461,7 +530,9 @@ export function useGame(): UseGame {
       // advertised model). null = unroutable (no base / no models loaded yet).
       const resolveUrl = (boardId: 'A' | 'B'): string | null => {
         const s = pveSettingsRef.current;
-        const selected = boardId === 'A' ? s.modelA : s.modelB;
+        // PvE only has one AI (board B) with its own model; EvE picks per board.
+        const selected =
+          modeRef.current === 'pve' ? s.pveModel : boardId === 'A' ? s.eveModelA : s.eveModelB;
         // An id the router doesn't advertise resolves like "auto" rather than
         // being sent as-is, so the connection always matches what the picker
         // shows (which falls back to the first model for an unknown value).
@@ -485,6 +556,14 @@ export function useGame(): UseGame {
         }
       };
 
+      // Re-point both boards at their currently-selected models. Idempotent, so
+      // the "model changed" effect can call it every render without churn.
+      syncClientsRef.current = () => {
+        if (!boardA || !boardB) return;
+        syncClient(boardA, resolveUrl('A'));
+        syncClient(boardB, resolveUrl('B'));
+      };
+
       const doReset = () => {
         if (!boardA || !boardB || !input) return;
         gen++;
@@ -496,9 +575,11 @@ export function useGame(): UseGame {
         const trimmed = seedRef.current.trim();
         const parsed = trimmed === '' ? NaN : Number(trimmed);
         const seedA = Number.isFinite(parsed) ? parsed >>> 0 : (Math.random() * 0x100000000) >>> 0;
-        // pve: both boards share the bag (fair race). eve: derive a distinct
-        // seed for B so a same-model match still diverges into a real game.
-        const seedB = m === 'eve' ? (seedA ^ 0x5bd1e995) >>> 0 : seedA;
+        // pve always shares the bag (fair race). eve defaults to a distinct seed
+        // for B so a same-model match still diverges into a real game, but the
+        // operator can force an identical start via eveSeedSync.
+        const seedB =
+          m === 'eve' && !pveSettingsRef.current.eveSeedSync ? (seedA ^ 0x5bd1e995) >>> 0 : seedA;
 
         const allSpin = rulesRef.current.allSpin;
         boardA.engine.setConfig(0, false, allSpin); // piece_life disabled, client-side gravity
@@ -544,15 +625,6 @@ export function useGame(): UseGame {
         return parts.join('\n\n');
       };
 
-      // Re-point the AI clients at their currently resolved model. Idempotent
-      // (syncClient no-ops when the URL is unchanged), so it's safe to run on
-      // every model-list / selection change.
-      syncRef.current = () => {
-        if (!boardA || !boardB) return;
-        syncClient(boardA, resolveUrl('A'));
-        syncClient(boardB, resolveUrl('B'));
-      };
-
       reconnectRef.current = () => {
         if (!boardA || !boardB) return;
         for (const board of [boardA, boardB]) {
@@ -577,6 +649,8 @@ export function useGame(): UseGame {
       input = new InputController({
         getSettings: () => settingsRef.current,
         getGamepadMapping: () => gamepadMappingRef.current,
+        getGamepadOptions: () => gamepadOptionsRef.current,
+        getKeyboardMapping: () => keyboardMappingRef.current,
         onReset: () => doReset(),
         onGamepadStatus: (s) => setGamepadStatus(s),
       });
@@ -640,6 +714,10 @@ export function useGame(): UseGame {
     setRules,
     gamepadMapping,
     setGamepadMapping,
+    gamepadOptions,
+    setGamepadOptions,
+    keyboardMapping,
+    setKeyboardMapping,
     gamepadStatus,
     seed,
     setSeed,
