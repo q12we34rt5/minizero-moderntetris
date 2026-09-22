@@ -58,6 +58,7 @@ protected:
     void cmdBoardSize(const std::vector<std::string>& args);
     void cmdGenmove(const std::vector<std::string>& args);
     void cmdSetState(const std::vector<std::string>& args);
+    void cmdGetAiInfo(const std::vector<std::string>& args);
     void cmdFinalScore(const std::vector<std::string>& args);
     void cmdPV(const std::vector<std::string>& args);
     void cmdPVString(const std::vector<std::string>& args);
