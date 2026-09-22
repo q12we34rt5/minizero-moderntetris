@@ -32,7 +32,7 @@ b2b、pending garbage、所有合法動作的 descriptor 與 afterstate），不
 
 - 模型：`moderntetris_placement_gpz_3bx256_n50-098904-dirty-rs-lst-nopc-0903` iter 1687040
 - `run.sh <dir> <iter> <label> <gpu> <num_games> [extra_conf]` 跑、`summarize.py` 彙整
-- `tests/run.sh`：env 層級的檢查（重抽保留可見資訊與 bag 組成）
+- `tests/run.sh`：env 層級的檢查（重抽保留可見資訊與 bag 組成、afterstate 選項）
 
 ## 結果
 
@@ -73,5 +73,8 @@ Sanity check：true-future 與訓練最後一個 iteration 的 self-play 統計�
    → 需要用 resample 訓練一個 model 才能拆開。
 3. **環境/特徵本身的洩漏**：afterstate 特徵是 hard drop（含這一步進場的垃圾）之後的
    盤面，會透露垃圾洞位；真實玩家落子前不知道。只有一步、影響看起來小（結論 2），
-   但新訓練時應改成在垃圾進場前計算 afterstate。
+   已新增 `nn_placement_afterstate_before_garbage`（預設 false，舊模型不受影響）：
+   落點 BFS 改在清空垃圾佇列的副本上跑，afterstate 就是垃圾進場前的盤面。
+   測試：2736 個有待進場垃圾的狀態中，關閉時 178 個（6.5%）的 descriptor 隨
+   `garbage_seed` 改變，開啟時 0 個；合法動作集合不變。新訓練應開啟。
 4. 各組局面沒有配對（重抽會消耗同一條 RNG stream），靠局數壓變異數。

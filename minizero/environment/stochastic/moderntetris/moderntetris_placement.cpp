@@ -7,6 +7,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <iterator>
 #include <limits>
 #include <sstream>
 #include <unordered_map>
@@ -422,13 +423,25 @@ void ModernTetrisPlacementEnv::rebuildLegalPlacements() const
         }
     };
 
+    // The BFS hard-drops every candidate, which also lands any pending garbage
+    // with a hole column drawn from garbage_seed -- and final_state feeds the
+    // afterstate features. Searching from a copy with the garbage queue emptied
+    // keeps that unknowable column out of the network input. Moves, line clears
+    // and spins do not depend on the queue, and act() only replays the path, so
+    // the real game still takes its garbage.
+    engine::State search_state = ctx_.state;
+    if (config::nn_placement_afterstate_before_garbage) {
+        std::fill(std::begin(search_state.garbage_queue), std::end(search_state.garbage_queue), 0);
+        std::fill(std::begin(search_state.garbage_delay), std::end(search_state.garbage_delay), 0);
+    }
+
     // non-hold placements
-    auto placements = engine::findPlacements(ctx_.state);
-    addPlacements(ctx_.state.current, false, placements);
+    auto placements = engine::findPlacements(search_state);
+    addPlacements(search_state.current, false, placements);
 
     // hold placements (only if not already held this turn)
     if (!ctx_.state.has_held) {
-        engine::State hold_state = ctx_.state;
+        engine::State hold_state = search_state;
         engine::hold(&hold_state);
         if (hold_state.current != ctx_.state.current || ctx_.state.hold != engine::PieceType::NONE) {
             auto hold_placements = engine::findPlacements(hold_state);
@@ -605,6 +618,8 @@ std::vector<PlacementActionDescriptor> ModernTetrisPlacementEnv::getActionDescri
             // final_state is the board right after this placement locked and its
             // lines cleared, with the next piece already spawned -- so a failed
             // spawn (is_alive == false) is exactly "this placement tops out".
+            // With nn_placement_afterstate_before_garbage it excludes the pending
+            // garbage (see rebuildLegalPlacements).
             fillAfterstateFeatures(before, computeBoardStats(cp.result.final_state.board),
                                    !cp.result.final_state.is_alive, d.afterstate);
         }

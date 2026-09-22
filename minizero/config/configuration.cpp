@@ -80,6 +80,7 @@ int nn_placement_mlp_ratio = 4;
 float nn_placement_dropout = 0.1f;
 std::string nn_placement_backbone = "transformer";
 bool nn_placement_use_afterstate_feature = false;
+bool nn_placement_afterstate_before_garbage = false;
 
 // environment parameters
 int env_board_size = 0;
@@ -211,6 +212,7 @@ void setConfiguration(ConfigureLoader& cl)
     cl.addParameter("nn_placement_dropout", nn_placement_dropout, "placement transformer: dropout", "Network");
     cl.addParameter("nn_placement_backbone", nn_placement_backbone, "placement backbone: transformer/mlp_flat/mlp_conv (mlp_* score each action independently)", "Network");
     cl.addParameter("nn_placement_use_afterstate_feature", nn_placement_use_afterstate_feature, "placement: attach a summary of the board AFTER each placement (column heights, holes, transitions, wells, top-out) to its action token", "Network");
+    cl.addParameter("nn_placement_afterstate_before_garbage", nn_placement_afterstate_before_garbage, "placement: compute the afterstate summary before pending garbage lands, so it does not reveal the garbage hole column (which the player cannot know before placing); false reproduces older models", "Network");
 
     // environment parameters
     cl.addParameter("env_board_size", env_board_size, "the size of board", "Environment");
