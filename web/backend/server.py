@@ -20,10 +20,19 @@ Usage (from the repo root, inside the container):
 The model cfg and .pt path are REQUIRED and explicit -- nothing is hardcoded.
 
 Protocol (JSON over WebSocket):
-    client -> {"type": "request_move", "state": [<codec ints>]}
+    client -> {"type": "request_move", "state": [<codec ints>],
+               "opponent_state": [<codec ints>]?}
+              opponent_state is optional: supply it for two-player play so the
+              AI's two-player search sees the real opponent board; omit it for
+              single-board inference (the backend then uses an empty opponent).
+              A two-player model (2 board channels) requires the cfg to set
+              env_modern_tetris_two_player=true.
     server -> {"type": "move", "placement": {"use_hold", "lock_x", "lock_y",
-                                             "orientation", "spin_type"}}
+                                             "orientation", "spin_type"},
+               "info": {<key>: <str value>, ...}}
               placement is null if the AI resigned / topped out / passed.
+              info is a general key->value map the frontend renders as-is
+              (currently value, and winloss in two-player mode).
     server -> {"type": "error", "message": "..."}  on failure
 """
 
@@ -40,6 +49,18 @@ import websockets
 
 GENMOVE_RE = re.compile(r"^h([01])_x(-?\d+)_y(-?\d+)_o(\d)_s(\d)$")
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _parse_info(raw: str) -> dict:
+    """Parse the get_ai_info reply -- a space-separated list of key=value pairs
+    -- into a dict of string values, which the frontend renders generically."""
+    info: dict[str, str] = {}
+    for token in raw.split():
+        if "=" in token:
+            key, _, val = token.partition("=")
+            if key:
+                info[key] = val
+    return info
 
 
 class MinizeroConsole:
@@ -100,23 +121,34 @@ class MinizeroConsole:
                     raise RuntimeError(f"console command failed: {line!r} -> {text!r}")
                 return msg
 
-    async def get_move(self, state: list[int]) -> dict | None:
-        """Inject `state`, run genmove, return the parsed placement (or None)."""
+    async def get_move(self, state: list[int], opponent_state: list[int] | None = None) -> tuple[dict | None, dict]:
+        """Inject `state` (and, in two-player play, `opponent_state`), read the
+        AI's extra info for that position, then run genmove. Returns
+        (placement | None, info_dict). set_state accepts one board (opponent
+        defaults to empty) or two boards [mover, opponent]."""
+        flat = list(state)
+        if opponent_state is not None:
+            flat = flat + list(opponent_state)
         async with self._lock:
-            await self._command("set_state " + " ".join(str(int(v)) for v in state))
+            await self._command("set_state " + " ".join(str(int(v)) for v in flat))
+            # Read head values for the just-injected board BEFORE genmove (genmove
+            # advances the env by the chosen move).
+            info_raw = await self._command("get_ai_info")
             reply = await self._command("genmove b")
+        info = _parse_info(info_raw)
         m = GENMOVE_RE.match(reply)
         if not m:
             # Resign / PASS / unexpected -> AI has no move (treated as a loss).
             print(f"[backend] genmove -> {reply!r} (no placement)", flush=True)
-            return None
-        return {
+            return None, info
+        placement = {
             "use_hold": int(m.group(1)),
             "lock_x": int(m.group(2)),
             "lock_y": int(m.group(3)),
             "orientation": int(m.group(4)),
             "spin_type": int(m.group(5)),
         }
+        return placement, info
 
 
 async def handle(ws, console: MinizeroConsole) -> None:
@@ -135,12 +167,16 @@ async def handle(ws, console: MinizeroConsole) -> None:
             if not isinstance(state, list):
                 await ws.send(json.dumps({"type": "error", "message": "missing state array"}))
                 continue
+            opponent_state = msg.get("opponent_state")
+            if opponent_state is not None and not isinstance(opponent_state, list):
+                await ws.send(json.dumps({"type": "error", "message": "opponent_state must be an array"}))
+                continue
             try:
-                placement = await console.get_move(state)
+                placement, info = await console.get_move(state, opponent_state)
             except Exception as e:  # noqa: BLE001 -- surface any console failure to the client
                 await ws.send(json.dumps({"type": "error", "message": str(e)}))
                 continue
-            await ws.send(json.dumps({"type": "move", "placement": placement}))
+            await ws.send(json.dumps({"type": "move", "placement": placement, "info": info}))
     except websockets.ConnectionClosed:
         pass
     finally:

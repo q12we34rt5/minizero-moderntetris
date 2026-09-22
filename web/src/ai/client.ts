@@ -11,6 +11,13 @@ interface MoveMessage {
     orientation: number;
     spin_type: number;
   } | null;
+  info?: Record<string, string>;
+}
+
+/** An AI move together with any extra key->value info the backend attached. */
+export interface AiMove {
+  placement: Placement | null;
+  info: Record<string, string>;
 }
 
 interface ErrorMessage {
@@ -25,7 +32,7 @@ interface ErrorMessage {
 export class AiClient {
   private ws: WebSocket | null = null;
   private pending: {
-    resolve: (p: Placement | null) => void;
+    resolve: (m: AiMove) => void;
     reject: (e: Error) => void;
   } | null = null;
   private statusListeners = new Set<(s: AiConnectionStatus) => void>();
@@ -78,17 +85,19 @@ export class AiClient {
       if (msg.type === 'error') {
         p.reject(new Error(msg.message));
       } else if (msg.type === 'move') {
-        p.resolve(
-          msg.placement === null
-            ? null
-            : {
-                useHold: msg.placement.use_hold !== 0,
-                lockX: msg.placement.lock_x,
-                lockY: msg.placement.lock_y,
-                orientation: msg.placement.orientation,
-                spinType: msg.placement.spin_type,
-              },
-        );
+        p.resolve({
+          placement:
+            msg.placement === null
+              ? null
+              : {
+                  useHold: msg.placement.use_hold !== 0,
+                  lockX: msg.placement.lock_x,
+                  lockY: msg.placement.lock_y,
+                  orientation: msg.placement.orientation,
+                  spinType: msg.placement.spin_type,
+                },
+          info: msg.info ?? {},
+        });
       } else {
         p.reject(new Error('unknown response type'));
       }
@@ -114,8 +123,13 @@ export class AiClient {
     p?.reject(e);
   }
 
-  /** Request the AI's placement for a serialized engine state. */
-  requestMove(state: Int32Array): Promise<Placement | null> {
+  /**
+   * Request the AI's placement for a serialized engine state. When
+   * `opponentState` is supplied (two-player play), it is sent so the AI's
+   * two-player search sees the real opponent board; otherwise the backend
+   * falls back to an empty opponent (single-board inference).
+   */
+  requestMove(state: Int32Array, opponentState?: Int32Array): Promise<AiMove> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error('not connected'));
     }
@@ -124,7 +138,9 @@ export class AiClient {
     }
     return new Promise((resolve, reject) => {
       this.pending = { resolve, reject };
-      this.ws!.send(JSON.stringify({ type: 'request_move', state: Array.from(state) }));
+      const payload: Record<string, unknown> = { type: 'request_move', state: Array.from(state) };
+      if (opponentState) { payload.opponent_state = Array.from(opponentState); }
+      this.ws!.send(JSON.stringify(payload));
     });
   }
 }

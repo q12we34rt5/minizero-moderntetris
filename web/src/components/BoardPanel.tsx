@@ -1,3 +1,4 @@
+import { AiInfoPanel } from './AiInfoPanel.tsx';
 import { BoardCanvas } from './BoardCanvas.tsx';
 import { GarbageBar } from './GarbageBar.tsx';
 import { PiecePreview } from './PiecePreview.tsx';
@@ -42,11 +43,11 @@ export function BoardPanel({ label, hud, overlay }: Props) {
             <div className="panel-title">Stats</div>
             <div className="stat-grid" style={{ gridTemplateColumns: '1fr' }}>
               <MiniStat label="Lines" value={view?.totalLinesCleared ?? 0} />
-              <MiniStat label="Attack" value={view?.totalAttack ?? 0} />
               <MiniStat label="Combo" value={view?.comboCount ?? 0} />
               <MiniStat label="B2B" value={view?.b2bCount ?? 0} />
               <MiniStat label="PPS" value={(hud?.pps ?? 0).toFixed(2)} />
               <MiniStat label="APM" value={(hud?.apm ?? 0).toFixed(1)} />
+              <MiniStat label="APP" value={(hud?.app ?? 0).toFixed(2)} />
               <MiniStat
                 label="Spin"
                 value={SPIN_NAMES[view?.spinType ?? 0] ?? 'NONE'}
@@ -59,7 +60,7 @@ export function BoardPanel({ label, hud, overlay }: Props) {
         <div className="board-stack">
           <GarbageBar queue={view?.garbageQueue ?? []} delay={view?.garbageDelay ?? []} />
           <div className="board-wrapper">
-            <BoardCanvas view={view} />
+            <BoardCanvas view={view} colors={hud?.colors ?? null} />
             {overlay && (
               <div className={`overlay ${overlay.tone}`}>
                 <h2>{overlay.title}</h2>
@@ -78,6 +79,7 @@ export function BoardPanel({ label, hud, overlay }: Props) {
               ))}
             </div>
           </div>
+          <AiInfoPanel info={hud?.aiInfo ?? {}} />
         </div>
       </div>
     </div>

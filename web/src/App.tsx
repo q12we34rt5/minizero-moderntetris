@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useGame, type GameMode } from './game/useGame.ts';
+import { useGame, type GameMode, type ModelInfo } from './game/useGame.ts';
 import { BoardPanel, type BoardOverlay } from './components/BoardPanel.tsx';
 import { SettingsPanel } from './components/SettingsPanel.tsx';
 import { PveSettingsPanel } from './components/PveSettingsPanel.tsx';
@@ -23,16 +23,22 @@ const MODES: { id: GameMode; label: string }[] = [
   { id: 'eve', label: 'EvE' },
 ];
 
-function boardLabels(mode: GameMode): [string, string] {
-  if (mode === 'pve') return ['You', 'AI'];
-  if (mode === 'eve') return ['AI A', 'AI B'];
+/** Display name for a board's selected model (empty selection = first available). */
+function modelLabel(models: ModelInfo[], selectedId: string, fallback: string): string {
+  const eff = selectedId || models[0]?.id || '';
+  return models.find((m) => m.id === eff)?.displayName ?? fallback;
+}
+
+function boardLabels(mode: GameMode, models: ModelInfo[], modelA: string, modelB: string): [string, string] {
+  if (mode === 'pve') return ['You', modelLabel(models, modelB, 'AI')];
+  if (mode === 'eve') return [modelLabel(models, modelA, 'AI A'), modelLabel(models, modelB, 'AI B')];
   return ['Player', ''];
 }
 
 export default function App() {
   const game = useGame();
   const { mode, status, winner, hud, aiHud } = game;
-  const [labelA, labelB] = boardLabels(mode);
+  const [labelA, labelB] = boardLabels(mode, game.models, game.pveSettings.modelA, game.pveSettings.modelB);
   const [dump, setDump] = useState('');
 
   const onDump = () => {
@@ -133,6 +139,7 @@ export default function App() {
             mode={mode}
             settings={game.pveSettings}
             onChange={game.setPveSettings}
+            models={game.models}
             aiStatusA={game.aiStatusA}
             aiStatusB={game.aiStatusB}
             onReconnect={game.reconnectAi}
@@ -174,8 +181,8 @@ export default function App() {
           )}
           {mode === 'eve' && (
             <p className="hint">
-              Two AIs play with different piece sequences. Point the two backend URLs at
-              different models for a model-vs-model match.
+              Two AIs play with different piece sequences. Pick a different model for
+              each board for a model-vs-model match.
             </p>
           )}
           <div className="controls-row">
