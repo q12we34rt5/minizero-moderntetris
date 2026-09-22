@@ -3,6 +3,8 @@
 #include "time_system.h"
 #include <algorithm>
 #include <memory>
+#include <stdexcept>
+#include <string>
 #include <tuple>
 #include <unordered_map>
 #include <utility>
@@ -35,6 +37,15 @@ void ZeroActor::resetSearch()
     BaseActor::resetSearch();
     mcts_search_data_.node_path_.clear();
     getMCTS()->getRootNode()->setAction(Action(-1, env::getPreviousPlayer(env_.getTurn(), env_.getNumPlayer())));
+    search_root_env_.reset();
+#if MODERNTETRIS_PLACEMENT
+    if (config::actor_mcts_resample_hidden_future) {
+        const std::string& parts = config::actor_mcts_resample_hidden_future_parts;
+        search_root_env_ = env_;
+        search_root_env_->resampleHiddenFuture(parts.find("pieces") != std::string::npos, parts.find("garbage") != std::string::npos, parts.find("garbage-iid") == std::string::npos);
+        checkSearchRootObservation();
+    }
+#endif
 }
 
 Action ZeroActor::think(bool with_play /*= false*/, bool display_board /*= false*/)
@@ -324,6 +335,23 @@ std::vector<MCTS::ActionCandidate> ZeroActor::calculateMuZeroActionPolicy(MCTSNo
     return action_candidates;
 }
 
+#if MODERNTETRIS_PLACEMENT
+void ZeroActor::checkSearchRootObservation() const
+{
+    // The resampled root must look exactly like the real one to the network;
+    // otherwise the search is not just blind to the future but also misreads
+    // the present.
+    using namespace minizero::env::moderntetris_placement;
+    const auto build = [](const Environment& env) {
+        return network::buildPlacementNetworkInput(env, kPlacementBoardChannels, kModernTetrisPlacementBoardHeight, kModernTetrisPlacementBoardWidth);
+    };
+    const network::PlacementNetworkInput a = build(env_);
+    const network::PlacementNetworkInput b = build(*search_root_env_);
+    const bool same = a.board_features == b.board_features && a.current_piece == b.current_piece && a.hold_piece == b.hold_piece && a.has_held == b.has_held && a.preview == b.preview && a.was_rotation == b.was_rotation && a.srs_index == b.srs_index && a.combo_scaled == b.combo_scaled && a.back_to_back == b.back_to_back && a.garbage_scaled == b.garbage_scaled && a.action_use_hold == b.action_use_hold && a.action_lock_x == b.action_lock_x && a.action_lock_y == b.action_lock_y && a.action_orientation == b.action_orientation && a.action_spin_type == b.action_spin_type && a.action_piece_type == b.action_piece_type && a.action_lines_cleared == b.action_lines_cleared && a.action_afterstate == b.action_afterstate;
+    if (!same) { throw std::runtime_error{"resampled search root differs from the real env in its network input"}; }
+}
+#endif
+
 Environment ZeroActor::getEnvironmentTransition(const std::vector<MCTSNode*>& node_path)
 {
     // Walk back to the deepest ancestor that has a cached env; clone from there
@@ -336,7 +364,7 @@ Environment ZeroActor::getEnvironmentTransition(const std::vector<MCTSNode*>& no
             break;
         }
     }
-    Environment env = (start > 0) ? node_path[start]->getEnv() : env_;
+    Environment env = (start > 0) ? node_path[start]->getEnv() : getSearchRootEnv();
     for (size_t i = start + 1; i < node_path.size(); ++i) {
         env.act(node_path[i]->getAction());
     }

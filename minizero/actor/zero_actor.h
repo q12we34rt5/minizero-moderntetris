@@ -73,11 +73,18 @@ protected:
     std::vector<MCTS::ActionCandidate> calculatePlacementActionPolicy(const Environment& env_transition, const std::shared_ptr<network::PlacementNetworkOutput>& placement_output);
 #endif
     virtual Environment getEnvironmentTransition(const std::vector<MCTSNode*>& node_path);
+#if MODERNTETRIS_PLACEMENT
+    void checkSearchRootObservation() const;
+#endif
+    const Environment& getSearchRootEnv() const { return search_root_env_ ? *search_root_env_ : env_; }
 
     bool enable_resign_;
     GumbelZero gumbel_zero_;
     uint64_t tree_node_size_;
     MCTSSearchData mcts_search_data_;
+    // Set when actor_mcts_resample_hidden_future is on: the env the search
+    // expands from, i.e. env_ with its unobservable future resampled.
+    std::optional<Environment> search_root_env_;
     utils::Rotation feature_rotation_;
     std::shared_ptr<network::AlphaZeroNetwork> alphazero_network_;
     std::shared_ptr<network::MuZeroNetwork> muzero_network_;

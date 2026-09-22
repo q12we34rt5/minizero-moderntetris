@@ -5,6 +5,8 @@
 #include "stochastic_env.h"
 #include <array>
 #include <cmath>
+#include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -199,6 +201,13 @@ public:
     // env behaves as a fresh root at the injected position.
     void setState(const engine::step::Context& ctx);
 
+    // Replace everything the player cannot observe -- piece order beyond the
+    // preview (within the current 7-bag constraints), the bag RNG seed, and the
+    // garbage RNG seed (from the next lock on) -- with a fresh sample from its
+    // posterior. A search run on the resampled copy can no longer peek at the
+    // real future. Everything the network sees at this state is unchanged.
+    void resampleHiddenFuture(bool pieces = true, bool garbage = true, bool shared_garbage = true);
+
     // Free the cached BFS placement results. Each cached entry carries a full
     // PlacementSearchResult (including the BFS path and final State), so the
     // cache can grow to tens of KB; clearing it before snapshotting an env in
@@ -230,6 +239,9 @@ private:
     float reward_prev_potential_ = 0.0f;
     mutable std::vector<CachedPlacement> cached_placements_;
     mutable bool placements_dirty_ = true;
+    // Garbage seed resampleHiddenFuture() swaps in after the next lock; 0 means
+    // a fresh seed per lock.
+    std::optional<std::uint32_t> garbage_seed_after_lock_;
 };
 
 class ModernTetrisPlacementEnvLoader : public StochasticEnvLoader<ModernTetrisPlacementAction, ModernTetrisPlacementEnv> {

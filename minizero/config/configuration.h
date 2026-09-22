@@ -18,6 +18,8 @@ extern float actor_mcts_reward_discount;
 extern int actor_mcts_think_batch_size;
 extern float actor_mcts_think_time_limit;
 extern bool actor_mcts_value_rescale;
+extern bool actor_mcts_resample_hidden_future;
+extern std::string actor_mcts_resample_hidden_future_parts;
 extern char actor_mcts_value_flipping_player;
 extern bool actor_select_action_by_count;
 extern bool actor_select_action_by_softmax_count;

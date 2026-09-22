@@ -208,6 +208,7 @@ std::string ModernTetrisPlacementAction::toConsoleString() const
 
 void ModernTetrisPlacementEnv::reset(int seed)
 {
+    garbage_seed_after_lock_.reset();
     random_.seed(seed_ = seed);
     actions_.clear();
     events_.clear();
@@ -231,6 +232,7 @@ void ModernTetrisPlacementEnv::reset(int seed)
 
 void ModernTetrisPlacementEnv::setState(const engine::step::Context& ctx)
 {
+    garbage_seed_after_lock_.reset();
     ctx_ = ctx;
     actions_.clear();
     events_.clear();
@@ -244,6 +246,42 @@ void ModernTetrisPlacementEnv::setState(const engine::step::Context& ctx)
         reward_prev_potential_ = reward::computeBoardPotential(ctx_.state, cfg);
     }
     turn_ = Player::kPlayer1;
+}
+
+void ModernTetrisPlacementEnv::resampleHiddenFuture(bool pieces /* = true */, bool garbage /* = true */, bool shared_garbage /* = true */)
+{
+    engine::State& state = ctx_.state;
+    // The garbage stream cannot be reseeded here: the hole column of any garbage
+    // landing on this lock is drawn from it during the hard drop, and the
+    // afterstate features already show that board. Swap the seed in right after
+    // the lock instead (see act()), so this state still looks exactly like the
+    // real one. With shared_garbage every action from here continues with the
+    // same new seed (common random numbers); otherwise each lock draws its own.
+    if (garbage) { garbage_seed_after_lock_ = shared_garbage ? static_cast<std::uint32_t>(Random::randInt()) | 1U : 0U; }
+    if (!pieces) { return; }
+
+    int count = 0;
+    while (count < 14 && state.next[count] != engine::PieceType::NONE) { ++count; }
+    const int visible = std::clamp(config::env_modern_tetris_num_preview_piece, 0, count);
+
+    // The engine refills next[7..13] with a whole bag once next[7] runs empty,
+    // so next[0..count) is the unconsumed tail of one bag followed by one full
+    // bag. Within each bag every order of its unseen pieces is equally likely,
+    // so shuffling the hidden slots of each bag in place samples the posterior.
+    const auto shuffle_hidden = [&](int begin, int end) {
+        begin = std::max(begin, visible);
+        for (int i = end - 1; i > begin; --i) {
+            const int j = begin + Random::randInt() % (i - begin + 1);
+            std::swap(state.next[i], state.next[j]);
+        }
+    };
+    const int bag_boundary = std::max(0, count - 7);
+    shuffle_hidden(0, bag_boundary);
+    shuffle_hidden(bag_boundary, count);
+
+    // xorshift gets stuck at 0, so keep the seed non-zero.
+    state.seed = static_cast<std::uint32_t>(Random::randInt()) | 1U;
+    placements_dirty_ = true;
 }
 
 bool ModernTetrisPlacementEnv::act(const ModernTetrisPlacementAction& action, bool with_chance /* = true */)
@@ -274,6 +312,11 @@ bool ModernTetrisPlacementEnv::act(const ModernTetrisPlacementAction& action, bo
     const engine::PieceType locked_piece = ctx_.state.current;
     const int locked_y = static_cast<int>(found->result.lock_y);
     engine::step::step(&ctx_, engine::step::Action::HARD_DROP);
+    if (garbage_seed_after_lock_) {
+        // 0 marks "draw a fresh seed per lock"; xorshift needs a non-zero seed.
+        ctx_.state.garbage_seed = *garbage_seed_after_lock_ != 0 ? *garbage_seed_after_lock_ : static_cast<std::uint32_t>(Random::randInt()) | 1U;
+        garbage_seed_after_lock_.reset();
+    }
 
     // Inject random garbage after the hard-drop so the current piece's attack
     // only counters pre-existing queue entries (new garbage waits until the

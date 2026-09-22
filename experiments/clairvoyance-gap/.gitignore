@@ -1,0 +1,2 @@
+# per-run stderr logs (game renders, ~2MB each)
+results/*.err

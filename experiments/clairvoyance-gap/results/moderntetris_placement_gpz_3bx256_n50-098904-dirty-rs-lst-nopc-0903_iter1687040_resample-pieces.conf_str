@@ -1,0 +1,1 @@
+nn_file_name=moderntetris_placement_gpz_3bx256_n50-098904-dirty-rs-lst-nopc-0903/model/weight_iter_1687040.pt:program_auto_seed=true:zero_num_threads=8:zero_num_parallel_games=32:actor_mcts_resample_hidden_future=true:actor_mcts_resample_hidden_future_parts=pieces
