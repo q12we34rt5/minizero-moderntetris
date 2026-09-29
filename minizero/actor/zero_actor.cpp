@@ -3,6 +3,7 @@
 #include "time_system.h"
 #include <algorithm>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -37,6 +38,31 @@ void ZeroActor::resetSearch()
     BaseActor::resetSearch();
     mcts_search_data_.node_path_.clear();
     getMCTS()->getRootNode()->setAction(Action(-1, env::getPreviousPlayer(env_.getTurn(), env_.getNumPlayer())));
+    pimc_search_index_ = 0;
+    pimc_action_score_.clear();
+    pimc_count_.clear();
+    pimc_vote_.clear();
+    pimc_value_sum_ = 0;
+    privileged_phase_ = false;
+    honest_action_id_ = -1;
+    honest_policy_.clear();
+    resampleSearchRootEnv();
+}
+
+void ZeroActor::startPrivilegedValueSearch()
+{
+    honest_policy_ = config::actor_use_gumbel ? gumbel_zero_.getMCTSPolicy(getMCTS()) : getMCTS()->getSearchDistributionString();
+    MCTSNode* honest_choice = decideActionNode();
+    honest_action_id_ = honest_choice->getAction().getActionID();
+    privileged_phase_ = true;
+    BaseActor::resetSearch();
+    mcts_search_data_.node_path_.clear();
+    getMCTS()->getRootNode()->setAction(Action(-1, env::getPreviousPlayer(env_.getTurn(), env_.getNumPlayer())));
+    search_root_env_.reset(); // search the real env: its root value is the privileged bootstrap
+}
+
+void ZeroActor::resampleSearchRootEnv()
+{
     search_root_env_.reset();
 #if MODERNTETRIS_PLACEMENT
     if (config::actor_mcts_resample_hidden_future) {
@@ -46,6 +72,67 @@ void ZeroActor::resetSearch()
         checkSearchRootObservation();
     }
 #endif
+}
+
+// Parses "action:weight,..." into (action, weight / total) pairs.
+static std::vector<std::pair<int, double>> normalizedDistribution(const std::string& text)
+{
+    double sum = 0;
+    std::vector<std::pair<int, double>> entries;
+    std::istringstream iss(text);
+    std::string item;
+    while (std::getline(iss, item, ',')) {
+        const std::size_t colon = item.find(':');
+        if (colon == std::string::npos) { continue; }
+        entries.emplace_back(std::stoi(item.substr(0, colon)), std::stod(item.substr(colon + 1)));
+        sum += entries.back().second;
+    }
+    if (sum > 0) {
+        for (auto& entry : entries) { entry.second /= sum; }
+    }
+    return entries;
+}
+
+// Folds the determinization just finished into the PIMC totals. The training
+// target is always the averaged search policy (gumbel's improved policy, or visit
+// counts without gumbel), which is what a single search would train on. The move
+// is decided by actor_mcts_pimc_aggregate:
+//   vote   each tree picks its move the way a single search would (gumbel's own
+//          decision), the trees vote; ties go to the averaged policy. With one
+//          determinization this is exactly the ordinary search.
+//   policy argmax of the averaged policy. Can pick an action no tree searched.
+//   count  argmax of the summed normalized visit counts.
+void ZeroActor::accumulatePimcSearch()
+{
+    pimc_value_sum_ += getMCTS()->getRootNode()->getMean();
+    const std::string target = config::actor_use_gumbel ? gumbel_zero_.getMCTSPolicy(getMCTS()) : getMCTS()->getSearchDistributionString();
+    for (const auto& [action_id, weight] : normalizedDistribution(target)) { pimc_action_score_[action_id] += weight; }
+    for (const auto& [action_id, weight] : normalizedDistribution(getMCTS()->getSearchDistributionString())) { pimc_count_[action_id] += weight; }
+    MCTSNode* chosen = config::actor_use_gumbel ? gumbel_zero_.decideActionNode(getMCTS()) : getMCTS()->selectChildByMaxCount(getMCTS()->getRootNode());
+    if (chosen != nullptr) { pimc_vote_[chosen->getAction().getActionID()] += 1; }
+}
+
+// Start the next determinization: same real root, fresh tree, fresh future.
+void ZeroActor::startNextPimcSearch()
+{
+    ++pimc_search_index_;
+    BaseActor::resetSearch();
+    mcts_search_data_.node_path_.clear();
+    getMCTS()->getRootNode()->setAction(Action(-1, env::getPreviousPlayer(env_.getTurn(), env_.getNumPlayer())));
+    resampleSearchRootEnv();
+}
+
+std::string ZeroActor::pimcPolicyString() const
+{
+    double sum = 0;
+    for (const auto& [action_id, score] : pimc_action_score_) { sum += score; }
+    if (sum <= 0) { return ""; }
+    std::ostringstream oss;
+    for (const auto& [action_id, score] : pimc_action_score_) {
+        if (score / sum < 1e-8) { continue; }
+        oss << (oss.str().empty() ? "" : ",") << action_id << ":" << score / sum;
+    }
+    return oss.str();
 }
 
 Action ZeroActor::think(bool with_play /*= false*/, bool display_board /*= false*/)
@@ -65,6 +152,13 @@ Action ZeroActor::think(bool with_play /*= false*/, bool display_board /*= false
 
 void ZeroActor::beforeNNEvaluation()
 {
+    // Self-play drives the actor through beforeNNEvaluation/afterNNEvaluation
+    // (not step()), so the hand-off to the next determinization lives here.
+    if (usePimcAggregation() && getMCTS()->reachMaximumSimulation() && pimc_search_index_ + 1 < config::actor_mcts_pimc_determinizations) {
+        accumulatePimcSearch();
+        startNextPimcSearch();
+    }
+    if (config::actor_mcts_privileged_value && !privileged_phase_ && getMCTS()->reachMaximumSimulation()) { startPrivilegedValueSearch(); }
     mcts_search_data_.node_path_ = selection();
     if (alphazero_network_) {
         mcts_search_data_.env_transition_ = getEnvironmentTransition(mcts_search_data_.node_path_);
@@ -229,7 +323,19 @@ void ZeroActor::step()
 
 void ZeroActor::handleSearchDone()
 {
-    mcts_search_data_.selected_node_ = decideActionNode();
+    if (usePimcAggregation()) { accumulatePimcSearch(); }
+    if (config::actor_mcts_privileged_value) {
+        // Play what the honest search chose; this real-future tree has the same root
+        // children, since the root observation is identical.
+        MCTSNode* root = getMCTS()->getRootNode();
+        mcts_search_data_.selected_node_ = nullptr;
+        for (int i = 0; i < root->getNumChildren(); ++i) {
+            if (root->getChild(i)->getAction().getActionID() == honest_action_id_) { mcts_search_data_.selected_node_ = root->getChild(i); }
+        }
+        if (mcts_search_data_.selected_node_ == nullptr) { mcts_search_data_.selected_node_ = decideActionNode(); }
+    } else {
+        mcts_search_data_.selected_node_ = decideActionNode();
+    }
     const Action action = getSearchAction();
     std::ostringstream oss;
     oss << "model file name: " << config::nn_file_name << std::endl
@@ -248,6 +354,34 @@ void ZeroActor::handleSearchDone()
 
 MCTSNode* ZeroActor::decideActionNode()
 {
+    if (usePimcAggregation()) {
+        // The root observation is identical across determinizations, so the last
+        // tree has a child for every action any of them could have picked.
+        const std::string& rule = config::actor_mcts_pimc_aggregate;
+        const auto lookup = [](const std::unordered_map<int, double>& m, int action_id) {
+            auto it = m.find(action_id);
+            return it == m.end() ? 0.0 : it->second;
+        };
+        MCTSNode* root = getMCTS()->getRootNode();
+        MCTSNode* best = nullptr;
+        std::pair<double, double> best_score{-1, -1};
+        for (int i = 0; i < root->getNumChildren(); ++i) {
+            MCTSNode* child = root->getChild(i);
+            const int action_id = child->getAction().getActionID();
+            const double policy = lookup(pimc_action_score_, action_id);
+            std::pair<double, double> score{policy, 0};
+            if (rule == "vote") {
+                score = {lookup(pimc_vote_, action_id), policy};
+            } else if (rule == "count") {
+                score = {lookup(pimc_count_, action_id), policy};
+            }
+            if (score > best_score) {
+                best_score = score;
+                best = child;
+            }
+        }
+        if (best != nullptr) { return best; }
+    }
     if (config::actor_use_gumbel) {
         return gumbel_zero_.decideActionNode(getMCTS());
     } else {
