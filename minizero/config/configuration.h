@@ -125,6 +125,7 @@ extern float env_modern_tetris_reward_attack_allspin;
 extern float env_modern_tetris_reward_attack_pc;
 extern float env_modern_tetris_reward_attack_b2b;
 extern float env_modern_tetris_reward_attack_combo_weight;
+extern float env_modern_tetris_reward_b2b_break_penalty;
 extern float env_modern_tetris_reward_clear_depth_weight_bottom;
 extern float env_modern_tetris_reward_clear_depth_weight_top;
 extern float env_modern_tetris_reward_height_weight;

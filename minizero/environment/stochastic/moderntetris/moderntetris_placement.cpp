@@ -311,6 +311,7 @@ bool ModernTetrisPlacementEnv::act(const ModernTetrisPlacementAction& action, bo
     // and overwrites state.y. lock_y is the piece's settled y (top-left of its
     // 4x4 bbox) — used to index depth-keyed reward terms.
     const engine::PieceType locked_piece = ctx_.state.current;
+    const int pre_b2b = ctx_.state.back_to_back_count;
     const int locked_y = static_cast<int>(found->result.lock_y);
     engine::step::step(&ctx_, engine::step::Action::HARD_DROP);
     if (garbage_seed_after_lock_) {
@@ -346,6 +347,7 @@ bool ModernTetrisPlacementEnv::act(const ModernTetrisPlacementAction& action, bo
         const auto cfg = reward::RewardConfig::fromGlobals();
         const bool just_died = !ctx_.state.is_alive;
         float base = reward::computeLockBaseReward(ctx_.state, locked_piece, locked_y, just_died, cfg);
+        base -= reward::computeB2bBreakPenalty(pre_b2b, ctx_.state, cfg);
         float phi_new = reward::computeBoardPotential(ctx_.state, cfg);
         reward_ = base + (phi_new - reward_prev_potential_);
         reward_prev_potential_ = phi_new;

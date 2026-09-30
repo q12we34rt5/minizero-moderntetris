@@ -52,6 +52,7 @@ struct RewardConfig {
     float attack_pc;                // perfect clear, overrides base (engine 10)
     float attack_b2b;               // qualifying back-to-back +1 (engine 1)
     float attack_combo_weight;      // multiplies the engine combo-table value
+    float b2b_break_penalty;        // subtracted when a clear breaks a running back-to-back chain
 
     // Depth-keyed multiplier applied to the whole attack bucket. Indexed by the
     // piece's y-coordinate just before the lock (for the placement env:
@@ -81,6 +82,12 @@ struct RewardConfig {
 //               depth-keyed low_clear bonus. Pass <0 to skip that term.
 // just_died   : true if this lock caused is_alive to flip to false.
 float computeLockBaseReward(const engine::State& post_state, engine::PieceType locked_piece, int locked_y, bool just_died, const RewardConfig& cfg);
+
+// Penalty for a clear that breaks a running back-to-back chain: pre_b2b is the
+// engine's back_to_back_count before the lock (>= 0 while a chain is running,
+// -1 otherwise). Clears made with no chain running cost nothing, so clearing
+// lines to survive stays free. Returns the (non-negative) amount to subtract.
+float computeB2bBreakPenalty(int pre_b2b, const engine::State& post_state, const RewardConfig& cfg);
 
 // Potential function phi(state). Returns 0 if both weights are zero (fast path).
 // phi = -(height_weight * max_height + hole_weight * hole_count)

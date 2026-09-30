@@ -36,11 +36,19 @@ RewardConfig RewardConfig::fromGlobals()
     c.attack_pc = config::env_modern_tetris_reward_attack_pc;
     c.attack_b2b = config::env_modern_tetris_reward_attack_b2b;
     c.attack_combo_weight = config::env_modern_tetris_reward_attack_combo_weight;
+    c.b2b_break_penalty = config::env_modern_tetris_reward_b2b_break_penalty;
     c.clear_depth_weight_bottom = config::env_modern_tetris_reward_clear_depth_weight_bottom;
     c.clear_depth_weight_top = config::env_modern_tetris_reward_clear_depth_weight_top;
     c.height_weight = config::env_modern_tetris_reward_height_weight;
     c.hole_weight = config::env_modern_tetris_reward_hole_weight;
     return c;
+}
+
+float computeB2bBreakPenalty(int pre_b2b, const engine::State& post, const RewardConfig& cfg)
+{
+    // back_to_back_count drops back to -1 on a clear that is neither a tetris nor a spin
+    const bool broke = pre_b2b >= 0 && post.lines_cleared > 0 && post.back_to_back_count < 0;
+    return broke ? cfg.b2b_break_penalty : 0.0f;
 }
 
 float computeLockBaseReward(const engine::State& post, engine::PieceType locked_piece, int locked_y, bool just_died, const RewardConfig& cfg)
@@ -64,23 +72,23 @@ float computeLockBaseReward(const engine::State& post, engine::PieceType locked_
             // Full T-spin (SpinType::SPIN is only ever produced for a T).
             assert(locked_piece == engine::PieceType::T);
             assert(lines >= 1 && lines <= 3);
-            clear_reward += (lines == 1) ? cfg.attack_tspin_single
-                                         : (lines == 2) ? cfg.attack_tspin_double
-                                                        : cfg.attack_tspin_triple;
+            clear_reward += (lines == 1)   ? cfg.attack_tspin_single
+                            : (lines == 2) ? cfg.attack_tspin_double
+                                           : cfg.attack_tspin_triple;
         } else if (post.spin_type == engine::SpinType::SPIN_MINI && locked_piece == engine::PieceType::T) {
             // Mini T-spin (a real mini, or an immobile T under the all-spin ruleset).
             // No mini-triple knob: a 3-line clear is never a T mini, so use the triple.
-            clear_reward += (lines == 1) ? cfg.attack_tspin_mini_single
-                                         : (lines == 2) ? cfg.attack_tspin_mini_double
-                                                        : cfg.attack_triple;
+            clear_reward += (lines == 1)   ? cfg.attack_tspin_mini_single
+                            : (lines == 2) ? cfg.attack_tspin_mini_double
+                                           : cfg.attack_triple;
         } else {
             // Normal clear, and non-T all-spins (SPIN_MINI on a non-T, which the
             // engine also scores as a normal clear) that additionally earn
             // attack_allspin on top.
-            clear_reward += (lines == 1) ? cfg.attack_single
-                                         : (lines == 2) ? cfg.attack_double
-                                                        : (lines == 3) ? cfg.attack_triple
-                                                                       : cfg.attack_tetris;
+            clear_reward += (lines == 1)   ? cfg.attack_single
+                            : (lines == 2) ? cfg.attack_double
+                            : (lines == 3) ? cfg.attack_triple
+                                           : cfg.attack_tetris;
             if (post.spin_type == engine::SpinType::SPIN_MINI) { clear_reward += cfg.attack_allspin; }
         }
         // Qualifying back-to-back: a Tetris or any spin while a streak is active.

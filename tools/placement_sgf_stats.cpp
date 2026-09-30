@@ -14,6 +14,7 @@
 #include "moderntetris_placement.h"
 #include "reward_common.h"
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
@@ -51,10 +52,12 @@ struct Stats {
     double height_clear_sum = 0; // ... before each clearing placement
     double height_combo_sum = 0; // ... before each clear that continued a combo
     int combo_clears = 0;
-    double attack_reward = 0; // depth-weighted attack bucket (no survival/death term)
-    double combo_part = 0;    // the part of it produced by attack_combo_weight
-    double b2b_part = 0;      // the part produced by attack_b2b
-    double total_reward = 0;  // full per-lock reward, as trained (incl. death penalty)
+    double attack_reward = 0;     // depth-weighted attack bucket (no survival/death term)
+    double combo_part = 0;        // the part of it produced by attack_combo_weight
+    double b2b_part = 0;          // the part produced by attack_b2b
+    double total_reward = 0;      // full per-lock reward, as trained (incl. death penalty)
+    int b2b_breaks_penalized = 0; // clears that broke a running chain (b2b_break_penalty applied)
+    int reward_mismatches = 0;    // placements where the env's reward differs from the recomputation
 };
 
 // Reward configs that isolate one attack component: everything else is zeroed,
@@ -158,7 +161,9 @@ void recordPlacement(Stats& s, const engine::State& pre, const engine::State& po
     s.attack_reward += tetris::reward::computeLockBaseReward(post, piece, locked_y, false, cfgs.attack);
     s.combo_part += tetris::reward::computeLockBaseReward(post, piece, locked_y, false, cfgs.combo_only);
     s.b2b_part += tetris::reward::computeLockBaseReward(post, piece, locked_y, false, cfgs.b2b_only);
-    s.total_reward += tetris::reward::computeLockBaseReward(post, piece, locked_y, died, cfgs.full);
+    const float break_penalty = tetris::reward::computeB2bBreakPenalty(pre.back_to_back_count, post, cfgs.full);
+    if (lines > 0 && pre.back_to_back_count >= 0 && post.back_to_back_count < 0) { s.b2b_breaks_penalized++; }
+    s.total_reward += tetris::reward::computeLockBaseReward(post, piece, locked_y, died, cfgs.full) - break_penalty;
 }
 
 void replayGame(const std::string& record, Stats& s, const RewardConfigs& cfgs)
@@ -184,7 +189,15 @@ void replayGame(const std::string& record, Stats& s, const RewardConfigs& cfgs)
             return;
         }
         s.placements++;
-        recordPlacement(s, pre, env.getEngineState(), piece, unpacked.lock_y, cfgs);
+        const engine::State& post = env.getEngineState();
+        recordPlacement(s, pre, post, piece, unpacked.lock_y, cfgs);
+        // The env's own reward must match the recomputation from the reward config
+        // (base + b2b-break penalty + potential delta); a mismatch means the replay
+        // or the reward code has drifted from what training saw.
+        const float expected = tetris::reward::computeLockBaseReward(post, piece, unpacked.lock_y, !post.is_alive, cfgs.full) -
+                               tetris::reward::computeB2bBreakPenalty(pre.back_to_back_count, post, cfgs.full) +
+                               tetris::reward::computeBoardPotential(post, cfgs.full) - tetris::reward::computeBoardPotential(pre, cfgs.full);
+        if (std::abs(env.getReward() - expected) > 1e-3f) { s.reward_mismatches++; }
     }
     const int running = env.getEngineState().back_to_back_count;
     if (running >= 0) { s.b2b_chains.push_back(running + 1); }
@@ -236,6 +249,8 @@ void report(const std::string& label, const Stats& s)
                 s.t_pieces > 0 ? 100.0 * tspins / s.t_pieces : 0.0,
                 s.t_pieces > 0 ? 100.0 * (tspins + s.tspin_mini[1] + s.tspin_mini[2]) / s.t_pieces : 0.0,
                 s.t_pieces * per_game);
+    std::printf("  b2b breaks of a running chain: %.1f/game; reward check vs env: %d mismatches\n",
+                s.b2b_breaks_penalized * per_game, s.reward_mismatches);
     std::printf("  stack height: %.2f on average, %.2f at clears, %.2f at combo-extending clears (%d)\n",
                 s.placements > 0 ? s.height_sum / s.placements : 0.0,
                 clears > 0 ? s.height_clear_sum / clears : 0.0,

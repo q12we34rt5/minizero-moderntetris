@@ -125,6 +125,7 @@ float env_modern_tetris_reward_attack_allspin = 0.0f;
 float env_modern_tetris_reward_attack_pc = 10.0f;
 float env_modern_tetris_reward_attack_b2b = 1.0f;
 float env_modern_tetris_reward_attack_combo_weight = 1.0f;
+float env_modern_tetris_reward_b2b_break_penalty = 0.0f;
 float env_modern_tetris_reward_clear_depth_weight_bottom = 1.0f;
 float env_modern_tetris_reward_clear_depth_weight_top = 1.0f;
 float env_modern_tetris_reward_height_weight = 0.0f;
@@ -284,6 +285,7 @@ void setConfiguration(ConfigureLoader& cl)
     cl.addParameter("env_modern_tetris_reward_attack_pc", env_modern_tetris_reward_attack_pc, "reward shaping: attack value for a perfect clear; overrides the line/spin base value (engine 10)", "Environment");
     cl.addParameter("env_modern_tetris_reward_attack_b2b", env_modern_tetris_reward_attack_b2b, "reward shaping: attack added for a qualifying back-to-back (tetris or any spin with an active streak) (engine 1)", "Environment");
     cl.addParameter("env_modern_tetris_reward_attack_combo_weight", env_modern_tetris_reward_attack_combo_weight, "reward shaping: multiplier on the engine combo-table attack value for this clear (1 reproduces the engine combo bonus)", "Environment");
+    cl.addParameter("env_modern_tetris_reward_b2b_break_penalty", env_modern_tetris_reward_b2b_break_penalty, "reward shaping: subtracted when a clear breaks a running back-to-back chain; clears with no chain running cost nothing, so clearing lines to survive stays free (placement env only)", "Environment");
     cl.addParameter("env_modern_tetris_reward_clear_depth_weight_bottom", env_modern_tetris_reward_clear_depth_weight_bottom, "reward shaping: multiplier applied to the whole attack reward bucket when the piece locks at the bottom visible row; linearly interpolated with clear_depth_weight_top by pre-lock y", "Environment");
     cl.addParameter("env_modern_tetris_reward_clear_depth_weight_top", env_modern_tetris_reward_clear_depth_weight_top, "reward shaping: multiplier applied to the whole attack reward bucket when the piece locks at the top visible row; linearly interpolated with clear_depth_weight_bottom by pre-lock y", "Environment");
     cl.addParameter("env_modern_tetris_reward_height_weight", env_modern_tetris_reward_height_weight, "potential shaping: weight for max column height (lower = better)", "Environment");
