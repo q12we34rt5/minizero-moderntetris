@@ -57,7 +57,23 @@ struct Stats {
     double b2b_part = 0;          // the part produced by attack_b2b
     double total_reward = 0;      // full per-lock reward, as trained (incl. death penalty)
     int b2b_breaks_penalized = 0; // clears that broke a running chain (b2b_break_penalty applied)
-    int reward_mismatches = 0;    // placements where the env's reward differs from the recomputation
+    // Behaviour by stack height before the placement (buckets 0-4, 5-8, 9-12, 13-16, 17+):
+    // does play fall apart once the stack is high?
+    struct HeightBucket {
+        int placements = 0;
+        double search_value = 0;   // recorded root value
+        double policy_entropy = 0; // of the recorded search policy, in nats
+        double holes_added = 0;
+        int clears = 0;
+        double height_change = 0;
+    };
+    HeightBucket by_height[5];
+    // What led to each death: garbage arriving just before it, or a stack already high?
+    int deaths_seen = 0;
+    int deaths_after_garbage_spike = 0; // >= 3 garbage rows landed in one of the last 5 placements
+    double height_before_death = 0;     // stack height 8 placements before the fatal one
+    int deaths_with_history = 0;
+    int reward_mismatches = 0; // placements where the env's reward differs from the recomputation
 };
 
 // Reward configs that isolate one attack component: everything else is zeroed,
@@ -103,6 +119,63 @@ int stackHeight(const engine::State& state)
         if (state.board.data[y] != engine::ROW_EMPTY) { return engine::BOARD_BOTTOM - y + 1; }
     }
     return 0;
+}
+
+int countHoles(const engine::State& state)
+{
+    int holes = 0;
+    for (int x = engine::BOARD_LEFT; x <= engine::BOARD_RIGHT; ++x) {
+        bool covered = false;
+        for (int y = engine::BOARD_TOP; y <= engine::BOARD_BOTTOM; ++y) {
+            const bool filled = engine::ops::getCell(state.board, x, y) != engine::Cell::EMPTY;
+            if (filled) {
+                covered = true;
+            } else if (covered) {
+                holes++;
+            }
+        }
+    }
+    return holes;
+}
+
+// Rows of the visible stack that contain garbage.
+int garbageRows(const engine::State& state)
+{
+    int rows = 0;
+    for (int y = engine::BOARD_TOP; y <= engine::BOARD_BOTTOM; ++y) {
+        for (int x = engine::BOARD_LEFT; x <= engine::BOARD_RIGHT; ++x) {
+            if (engine::ops::getCell(state.board, x, y) == engine::Cell::GARBAGE) {
+                rows++;
+                break;
+            }
+        }
+    }
+    return rows;
+}
+
+int heightBucket(int height) { return std::min(4, height <= 4 ? 0 : (height - 1) / 4); }
+
+// Entropy (nats) of a recorded "action:weight,..." search policy.
+double policyEntropy(const std::string& policy)
+{
+    std::vector<double> weights;
+    double sum = 0;
+    std::size_t start = 0;
+    while (start < policy.size()) {
+        std::size_t end = policy.find(',', start);
+        if (end == std::string::npos) { end = policy.size(); }
+        const std::size_t colon = policy.find(':', start);
+        if (colon != std::string::npos && colon < end) {
+            weights.push_back(std::stod(policy.substr(colon + 1, end - colon - 1)));
+            sum += weights.back();
+        }
+        start = end + 1;
+    }
+    double h = 0;
+    for (double w : weights) {
+        if (w > 0 && sum > 0) { h -= (w / sum) * std::log(w / sum); }
+    }
+    return h;
 }
 
 // The piece this placement locks: the current piece, or what a hold would swap in.
@@ -169,7 +242,7 @@ void recordPlacement(Stats& s, const engine::State& pre, const engine::State& po
 void replayGame(const std::string& record, Stats& s, const RewardConfigs& cfgs)
 {
     static const std::regex seed_re("SD\\[(-?\\d+)\\]");
-    static const std::regex action_re(";B\\[(\\d+)\\]");
+    static const std::regex action_re(";B\\[(\\d+)\\](?:P\\[([^\\]]*)\\])?(?:V\\[([-0-9.e+]+)\\])?");
 
     std::smatch m;
     if (!std::regex_search(record, m, seed_re)) { return; }
@@ -177,10 +250,20 @@ void replayGame(const std::string& record, Stats& s, const RewardConfigs& cfgs)
     env.reset(std::stoi(m[1].str()));
     s.games++;
 
+    struct Recent {
+        int height;
+        int garbage_added;
+    };
+    std::vector<Recent> recent; // this game's placements so far
     for (auto it = std::sregex_iterator(record.begin(), record.end(), action_re);
          it != std::sregex_iterator(); ++it) {
         const int action_id = std::stoi((*it)[1].str());
+        const std::string policy = (*it)[2].str();
+        const std::string value = (*it)[3].str();
         const engine::State pre = env.getEngineState();
+        const int pre_height = stackHeight(pre);
+        const int pre_holes = countHoles(pre);
+        const int pre_garbage = garbageRows(pre);
         const placement::UnpackedPlacement unpacked = placement::unpackPlacementId(action_id);
         const engine::PieceType piece = lockedPiece(pre, unpacked.use_hold);
         placement::ModernTetrisPlacementAction action(action_id, minizero::env::Player::kPlayer1);
@@ -198,6 +281,31 @@ void replayGame(const std::string& record, Stats& s, const RewardConfigs& cfgs)
                                tetris::reward::computeB2bBreakPenalty(pre.back_to_back_count, post, cfgs.full) +
                                tetris::reward::computeBoardPotential(post, cfgs.full) - tetris::reward::computeBoardPotential(pre, cfgs.full);
         if (std::abs(env.getReward() - expected) > 1e-3f) { s.reward_mismatches++; }
+
+        Stats::HeightBucket& bucket = s.by_height[heightBucket(pre_height)];
+        bucket.placements++;
+        if (!value.empty()) { bucket.search_value += std::stod(value); }
+        if (!policy.empty()) { bucket.policy_entropy += policyEntropy(policy); }
+        bucket.holes_added += countHoles(post) - pre_holes;
+        if (post.lines_cleared > 0) { bucket.clears++; }
+        bucket.height_change += stackHeight(post) - pre_height;
+        // garbage rows that landed with this lock: garbage on the board after, minus
+        // what was there before and survived the clear
+        recent.push_back({pre_height, std::max(0, garbageRows(post) - pre_garbage)});
+        if (!post.is_alive) {
+            s.deaths_seen++;
+            const int n = static_cast<int>(recent.size());
+            for (int k = std::max(0, n - 5); k < n; ++k) {
+                if (recent[k].garbage_added >= 3) {
+                    s.deaths_after_garbage_spike++;
+                    break;
+                }
+            }
+            if (n > 8) {
+                s.height_before_death += recent[n - 9].height;
+                s.deaths_with_history++;
+            }
+        }
     }
     const int running = env.getEngineState().back_to_back_count;
     if (running >= 0) { s.b2b_chains.push_back(running + 1); }
@@ -249,6 +357,19 @@ void report(const std::string& label, const Stats& s)
                 s.t_pieces > 0 ? 100.0 * tspins / s.t_pieces : 0.0,
                 s.t_pieces > 0 ? 100.0 * (tspins + s.tspin_mini[1] + s.tspin_mini[2]) / s.t_pieces : 0.0,
                 s.t_pieces * per_game);
+    std::printf("  by stack height before the placement:\n");
+    static const char* kBucketNames[5] = {" 0-4 ", " 5-8 ", " 9-12", "13-16", "17+  "};
+    for (int b = 0; b < 5; ++b) {
+        const Stats::HeightBucket& k = s.by_height[b];
+        if (k.placements == 0) { continue; }
+        const double n = k.placements;
+        std::printf("    %s: %5.1f%% of placements, search value %7.2f, policy entropy %.3f, holes added %+.3f, clear rate %4.1f%%, height change %+.2f\n",
+                    kBucketNames[b], 100.0 * n / s.placements, k.search_value / n, k.policy_entropy / n,
+                    k.holes_added / n, 100.0 * k.clears / n, k.height_change / n);
+    }
+    std::printf("  deaths %d: %.1f%% had >=3 garbage rows land in the last 5 placements; stack 8 placements before death %.2f\n",
+                s.deaths_seen, s.deaths_seen > 0 ? 100.0 * s.deaths_after_garbage_spike / s.deaths_seen : 0.0,
+                s.deaths_with_history > 0 ? s.height_before_death / s.deaths_with_history : 0.0);
     std::printf("  b2b breaks of a running chain: %.1f/game; reward check vs env: %d mismatches\n",
                 s.b2b_breaks_penalized * per_game, s.reward_mismatches);
     std::printf("  stack height: %.2f on average, %.2f at clears, %.2f at combo-extending clears (%d)\n",
