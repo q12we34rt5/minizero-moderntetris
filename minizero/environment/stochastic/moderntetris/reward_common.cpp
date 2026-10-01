@@ -37,6 +37,9 @@ RewardConfig RewardConfig::fromGlobals()
     c.attack_b2b = config::env_modern_tetris_reward_attack_b2b;
     c.attack_combo_weight = config::env_modern_tetris_reward_attack_combo_weight;
     c.b2b_break_penalty = config::env_modern_tetris_reward_b2b_break_penalty;
+    c.attack_combo_weight_high = config::env_modern_tetris_reward_attack_combo_weight_high;
+    c.combo_height_low = config::env_modern_tetris_reward_combo_height_low;
+    c.combo_height_high = config::env_modern_tetris_reward_combo_height_high;
     c.clear_depth_weight_bottom = config::env_modern_tetris_reward_clear_depth_weight_bottom;
     c.clear_depth_weight_top = config::env_modern_tetris_reward_clear_depth_weight_top;
     c.height_weight = config::env_modern_tetris_reward_height_weight;
@@ -49,6 +52,21 @@ float computeB2bBreakPenalty(int pre_b2b, const engine::State& post, const Rewar
     // back_to_back_count drops back to -1 on a clear that is neither a tetris nor a spin
     const bool broke = pre_b2b >= 0 && post.lines_cleared > 0 && post.back_to_back_count < 0;
     return broke ? cfg.b2b_break_penalty : 0.0f;
+}
+
+float computeComboHeightBonus(int pre_height, const engine::State& post, const RewardConfig& cfg)
+{
+    if (cfg.attack_combo_weight_high < 0.0f || post.lines_cleared == 0) { return 0.0f; }
+    float t = 1.0f;
+    if (cfg.combo_height_high > cfg.combo_height_low) {
+        t = static_cast<float>(pre_height - cfg.combo_height_low) / static_cast<float>(cfg.combo_height_high - cfg.combo_height_low);
+    } else if (pre_height < cfg.combo_height_high) {
+        t = 0.0f;
+    }
+    if (t < 0.0f) { t = 0.0f; }
+    if (t > 1.0f) { t = 1.0f; }
+    const float weight = cfg.attack_combo_weight + (cfg.attack_combo_weight_high - cfg.attack_combo_weight) * t;
+    return (weight - cfg.attack_combo_weight) * static_cast<float>(comboValue(post.combo_count));
 }
 
 float computeLockBaseReward(const engine::State& post, engine::PieceType locked_piece, int locked_y, bool just_died, const RewardConfig& cfg)
@@ -112,6 +130,16 @@ float computeLockBaseReward(const engine::State& post, engine::PieceType locked_
     r += clear_weight * clear_reward;
 
     return r;
+}
+
+int maxColumnHeight(const engine::State& state)
+{
+    for (int y = engine::BOARD_TOP; y <= engine::BOARD_BOTTOM; ++y) {
+        for (int x = engine::BOARD_LEFT; x <= engine::BOARD_RIGHT; ++x) {
+            if (engine::ops::getCell(state.board, x, y) != engine::Cell::EMPTY) { return engine::BOARD_BOTTOM + 1 - y; }
+        }
+    }
+    return 0;
 }
 
 float computeBoardPotential(const engine::State& state, const RewardConfig& cfg)

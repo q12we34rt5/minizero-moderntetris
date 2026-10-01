@@ -53,6 +53,12 @@ struct RewardConfig {
     float attack_b2b;               // qualifying back-to-back +1 (engine 1)
     float attack_combo_weight;      // multiplies the engine combo-table value
     float b2b_break_penalty;        // subtracted when a clear breaks a running back-to-back chain
+    // Height-keyed combo weight: attack_combo_weight at a pre-lock stack of
+    // combo_height_low or less, attack_combo_weight_high at combo_height_high or
+    // more, linear in between. Negative attack_combo_weight_high disables it.
+    float attack_combo_weight_high;
+    int combo_height_low;
+    int combo_height_high;
 
     // Depth-keyed multiplier applied to the whole attack bucket. Indexed by the
     // piece's y-coordinate just before the lock (for the placement env:
@@ -88,6 +94,14 @@ float computeLockBaseReward(const engine::State& post_state, engine::PieceType l
 // -1 otherwise). Clears made with no chain running cost nothing, so clearing
 // lines to survive stays free. Returns the (non-negative) amount to subtract.
 float computeB2bBreakPenalty(int pre_b2b, const engine::State& post_state, const RewardConfig& cfg);
+
+// Max column height of the stack.
+int maxColumnHeight(const engine::State& state);
+
+// Extra combo reward from the height-keyed combo weight: (weight(pre_height) -
+// attack_combo_weight) * combo value, so the total combo term follows the
+// height-keyed weight. Not scaled by the clear-depth multiplier. 0 when disabled.
+float computeComboHeightBonus(int pre_height, const engine::State& post_state, const RewardConfig& cfg);
 
 // Potential function phi(state). Returns 0 if both weights are zero (fast path).
 // phi = -(height_weight * max_height + hole_weight * hole_count)

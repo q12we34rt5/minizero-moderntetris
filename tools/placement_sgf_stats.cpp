@@ -236,7 +236,8 @@ void recordPlacement(Stats& s, const engine::State& pre, const engine::State& po
     s.b2b_part += tetris::reward::computeLockBaseReward(post, piece, locked_y, false, cfgs.b2b_only);
     const float break_penalty = tetris::reward::computeB2bBreakPenalty(pre.back_to_back_count, post, cfgs.full);
     if (lines > 0 && pre.back_to_back_count >= 0 && post.back_to_back_count < 0) { s.b2b_breaks_penalized++; }
-    s.total_reward += tetris::reward::computeLockBaseReward(post, piece, locked_y, died, cfgs.full) - break_penalty;
+    s.total_reward += tetris::reward::computeLockBaseReward(post, piece, locked_y, died, cfgs.full) - break_penalty +
+                      tetris::reward::computeComboHeightBonus(tetris::reward::maxColumnHeight(pre), post, cfgs.full);
 }
 
 void replayGame(const std::string& record, Stats& s, const RewardConfigs& cfgs)
@@ -279,6 +280,7 @@ void replayGame(const std::string& record, Stats& s, const RewardConfigs& cfgs)
         // or the reward code has drifted from what training saw.
         const float expected = tetris::reward::computeLockBaseReward(post, piece, unpacked.lock_y, !post.is_alive, cfgs.full) -
                                tetris::reward::computeB2bBreakPenalty(pre.back_to_back_count, post, cfgs.full) +
+                               tetris::reward::computeComboHeightBonus(tetris::reward::maxColumnHeight(pre), post, cfgs.full) +
                                tetris::reward::computeBoardPotential(post, cfgs.full) - tetris::reward::computeBoardPotential(pre, cfgs.full);
         if (std::abs(env.getReward() - expected) > 1e-3f) { s.reward_mismatches++; }
 
