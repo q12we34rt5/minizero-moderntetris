@@ -14,6 +14,7 @@ void MCTSNode::reset()
     policy_noise_ = 0.0f;
     value_ = 0.0f;
     reward_ = 0.0f;
+    outcome_key_ = 0;
     first_child_ = nullptr;
     env_.reset();
 }
@@ -184,6 +185,31 @@ void MCTS::backup(const std::vector<MCTSNode*>& node_path, const float value, co
         node->add(updated_value);
         updateTreeValueBound(old_mean, node->getReward() + config::actor_mcts_reward_discount * node->getMean());
         updated_value = node->getReward() + config::actor_mcts_reward_discount * updated_value;
+    }
+}
+
+void MCTS::backupWithChance(const std::vector<MCTSNode*>& node_path, const float value, const float reward)
+{
+    assert(node_path.size() % 2 == 1);
+    float updated_value = value;
+    node_path.back()->setValue(value);
+    node_path.back()->setReward(reward);
+    for (int i = static_cast<int>(node_path.size() - 1); i >= 0; --i) {
+        MCTSNode* node = node_path[i];
+        if (i % 2 == 1) { // action node: updated_value is the value of the outcome state reached
+            const float outcome_reward = node_path[i + 1]->getReward();
+            const float old_mean = node->getReward() + config::actor_mcts_reward_discount * node->getMean();
+            node->add(updated_value);
+            node->setReward(node->getReward() + (outcome_reward - node->getReward()) / node->getCount());
+            updateTreeValueBound(old_mean, node->getReward() + config::actor_mcts_reward_discount * node->getMean());
+            updated_value = outcome_reward + config::actor_mcts_reward_discount * updated_value;
+        } else if (i == 0) { // root
+            const float old_mean = node->getReward() + config::actor_mcts_reward_discount * node->getMean();
+            node->add(updated_value);
+            updateTreeValueBound(old_mean, node->getReward() + config::actor_mcts_reward_discount * node->getMean());
+        } else { // outcome node
+            node->add(updated_value);
+        }
     }
 }
 

@@ -23,6 +23,7 @@ extern int actor_mcts_pimc_determinizations;
 extern std::string actor_mcts_pimc_aggregate;
 extern bool actor_mcts_pimc_force;
 extern bool actor_mcts_privileged_value;
+extern int actor_mcts_chance_worlds;
 extern std::string actor_mcts_resample_hidden_future_parts;
 extern char actor_mcts_value_flipping_player;
 extern bool actor_select_action_by_count;

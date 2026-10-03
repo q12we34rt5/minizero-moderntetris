@@ -12,6 +12,7 @@ public:
     std::string getMCTSPolicy(const std::shared_ptr<MCTS>& mcts) const;
     MCTSNode* decideActionNode(const std::shared_ptr<MCTS>& mcts);
     std::vector<MCTSNode*> selection(const std::shared_ptr<MCTS>& mcts);
+    MCTSNode* nextCandidate();
     void sequentialHalving(const std::shared_ptr<MCTS>& mcts);
     void sortCandidatesByScore(const std::shared_ptr<MCTS>& mcts);
 

@@ -285,6 +285,34 @@ void ModernTetrisPlacementEnv::resampleHiddenFuture(bool pieces /* = true */, bo
     placements_dirty_ = true;
 }
 
+std::uint64_t ModernTetrisPlacementEnv::getObservationKey() const
+{
+    const engine::State& state = ctx_.state;
+    std::uint64_t hash = 14695981039346656037ULL; // FNV-1a
+    const auto mix = [&hash](const void* data, std::size_t size) {
+        const auto* bytes = static_cast<const unsigned char*>(data);
+        for (std::size_t i = 0; i < size; ++i) {
+            hash ^= bytes[i];
+            hash *= 1099511628211ULL;
+        }
+    };
+    const auto mix_value = [&mix](auto value) { mix(&value, sizeof(value)); };
+    mix(state.board.data, sizeof(state.board.data));
+    mix_value(state.is_alive);
+    const int preview_size = std::clamp(config::env_modern_tetris_num_preview_piece, 0, 14);
+    for (int i = 0; i < preview_size; ++i) { mix_value(state.next[i]); }
+    mix_value(state.hold);
+    mix_value(state.has_held);
+    mix_value(state.current);
+    mix_value(state.was_last_rotation);
+    mix_value(state.srs_index);
+    mix_value(state.back_to_back_count);
+    mix_value(state.combo_count);
+    mix(state.garbage_queue, sizeof(state.garbage_queue));
+    mix(state.garbage_delay, sizeof(state.garbage_delay));
+    return hash;
+}
+
 bool ModernTetrisPlacementEnv::act(const ModernTetrisPlacementAction& action, bool with_chance /* = true */)
 {
     if (turn_ != Player::kPlayer1 || action.getPlayer() != Player::kPlayer1) { return false; }

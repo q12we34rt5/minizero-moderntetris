@@ -84,6 +84,14 @@ protected:
     // honest search is done, keep its move and policy, then search the real future
     // for the value only.
     void startPrivilegedValueSearch();
+    // Chance-node search (actor_mcts_chance_worlds > 0): a few futures (worlds) are
+    // sampled per move, each simulation replays one of them from the root, and each
+    // action branches on the observation it revealed. Worlds that look alike share
+    // nodes; sibling actions are compared on the same worlds.
+    bool useChanceNodes() const { return config::actor_mcts_chance_worlds > 0; }
+#if MODERNTETRIS_PLACEMENT
+    std::vector<MCTSNode*> chanceSelection();
+#endif
     void accumulatePimcSearch();
     void startNextPimcSearch();
     std::string pimcPolicyString() const;
@@ -110,6 +118,8 @@ protected:
     // Set when actor_mcts_resample_hidden_future is on: the env the search
     // expands from, i.e. env_ with its unobservable future resampled.
     std::optional<Environment> search_root_env_;
+    // Chance-node search: this move's sampled worlds.
+    std::vector<Environment> chance_worlds_;
     // PIMC bookkeeping: which determinization we are on, per-action totals over
     // the ones done so far, and their summed root values.
     int pimc_search_index_ = 0;

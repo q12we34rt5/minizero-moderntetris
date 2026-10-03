@@ -21,6 +21,7 @@ int actor_mcts_pimc_determinizations = 1;
 std::string actor_mcts_pimc_aggregate = "vote";
 bool actor_mcts_pimc_force = false;
 bool actor_mcts_privileged_value = false;
+int actor_mcts_chance_worlds = 0;
 std::string actor_mcts_resample_hidden_future_parts = "pieces,garbage";
 char actor_mcts_value_flipping_player = 'W';
 bool actor_select_action_by_count = false;
@@ -159,6 +160,7 @@ void setConfiguration(ConfigureLoader& cl)
     cl.addParameter("actor_mcts_pimc_determinizations", actor_mcts_pimc_determinizations, "number of independently resampled futures searched per move (PIMC); each gets a full actor_num_simulation budget and the root statistics are averaged. 1 keeps a single search; only meaningful with actor_mcts_resample_hidden_future", "Actor");
     cl.addParameter("actor_mcts_pimc_aggregate", actor_mcts_pimc_aggregate, "how PIMC picks the move from its determinizations: vote (each tree decides as a single search would, the trees vote; identical to a single search with one determinization), policy (argmax of the averaged search policy) or count (argmax of summed normalized visit counts). The training target is always the averaged search policy", "Actor");
     cl.addParameter("actor_mcts_pimc_force", actor_mcts_pimc_force, "use the PIMC aggregation path even with a single determinization; a diagnostic that isolates the aggregation's decision rule from the extra futures", "Actor");
+    cl.addParameter("actor_mcts_chance_worlds", actor_mcts_chance_worlds, "chance-node search with common random numbers: >0 samples this many futures (worlds) per move; each visit of a root action replays one world in turn (visit i uses world i mod M) and the tree branches on the observation each step reveals, so worlds that look alike share nodes and sibling actions are compared on the same worlds; 1 is the single-sample search; 0 off; requires actor_mcts_resample_hidden_future (placement env only)", "Actor");
     cl.addParameter("actor_mcts_privileged_value", actor_mcts_privileged_value, "critic-only privileged information: the move and the policy target come from the search on the resampled (honest) future, then a second search on the real future supplies only the recorded root value, i.e. the value target's bootstrap; requires actor_mcts_resample_hidden_future and a single determinization", "Actor");
     cl.addParameter("actor_mcts_resample_hidden_future_parts", actor_mcts_resample_hidden_future_parts, "which hidden randomness actor_mcts_resample_hidden_future resamples: any of pieces,garbage (garbage-iid: each root action gets its own garbage future instead of a shared one; \"none\" only copies the root, as a plumbing control)", "Actor");
     cl.addParameter("actor_mcts_think_batch_size", actor_mcts_think_batch_size, "the MCTS selection batch size; only works when running console", "Actor");

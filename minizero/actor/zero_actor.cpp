@@ -46,7 +46,17 @@ void ZeroActor::resetSearch()
     privileged_phase_ = false;
     honest_action_id_ = -1;
     honest_policy_.clear();
+    if (useChanceNodes() && (!config::actor_mcts_resample_hidden_future || usePimcAggregation() || config::actor_mcts_privileged_value)) {
+        throw std::runtime_error{"actor_mcts_chance_worlds needs actor_mcts_resample_hidden_future and works without PIMC or privileged value"};
+    }
     resampleSearchRootEnv();
+    chance_worlds_.clear();
+#if MODERNTETRIS_PLACEMENT
+    for (int i = 0; i < config::actor_mcts_chance_worlds; ++i) {
+        resampleSearchRootEnv();
+        chance_worlds_.push_back(*search_root_env_);
+    }
+#endif
 }
 
 void ZeroActor::startPrivilegedValueSearch()
@@ -159,7 +169,12 @@ void ZeroActor::beforeNNEvaluation()
         startNextPimcSearch();
     }
     if (config::actor_mcts_privileged_value && !privileged_phase_ && getMCTS()->reachMaximumSimulation()) { startPrivilegedValueSearch(); }
+#if MODERNTETRIS_PLACEMENT
+    // chanceSelection also leaves the leaf's env in env_transition_
+    mcts_search_data_.node_path_ = (placement_network_ && useChanceNodes()) ? chanceSelection() : selection();
+#else
     mcts_search_data_.node_path_ = selection();
+#endif
     if (alphazero_network_) {
         mcts_search_data_.env_transition_ = getEnvironmentTransition(mcts_search_data_.node_path_);
         const Environment& env_transition = *mcts_search_data_.env_transition_;
@@ -167,7 +182,7 @@ void ZeroActor::beforeNNEvaluation()
         nn_evaluation_batch_id_ = alphazero_network_->pushBack(env_transition.getFeatures(feature_rotation_));
 #if MODERNTETRIS_PLACEMENT
     } else if (placement_network_) {
-        mcts_search_data_.env_transition_ = getEnvironmentTransition(mcts_search_data_.node_path_);
+        if (!useChanceNodes()) { mcts_search_data_.env_transition_ = getEnvironmentTransition(mcts_search_data_.node_path_); }
         const Environment& env_transition = *mcts_search_data_.env_transition_;
         feature_rotation_ = utils::Rotation::kRotationNone;
         using namespace minizero::env::moderntetris_placement;
@@ -214,7 +229,13 @@ void ZeroActor::afterNNEvaluation(const std::shared_ptr<NetworkOutput>& network_
         if (!env_transition.isTerminal()) {
             auto placement_output = std::static_pointer_cast<PlacementNetworkOutput>(network_output);
             getMCTS()->expand(leaf_node, calculatePlacementActionPolicy(env_transition, placement_output));
-            getMCTS()->backup(node_path, placement_output->value_, env_transition.getReward());
+            if (useChanceNodes()) {
+                getMCTS()->backupWithChance(node_path, placement_output->value_, env_transition.getReward());
+            } else {
+                getMCTS()->backup(node_path, placement_output->value_, env_transition.getReward());
+            }
+        } else if (useChanceNodes()) {
+            getMCTS()->backupWithChance(node_path, env_transition.getEvalScore(), env_transition.getReward());
         } else {
             getMCTS()->backup(node_path, env_transition.getEvalScore(), env_transition.getReward());
         }
@@ -483,6 +504,56 @@ void ZeroActor::checkSearchRootObservation() const
     const network::PlacementNetworkInput b = build(*search_root_env_);
     const bool same = a.board_features == b.board_features && a.current_piece == b.current_piece && a.hold_piece == b.hold_piece && a.has_held == b.has_held && a.preview == b.preview && a.was_rotation == b.was_rotation && a.srs_index == b.srs_index && a.combo_scaled == b.combo_scaled && a.back_to_back == b.back_to_back && a.garbage_scaled == b.garbage_scaled && a.action_use_hold == b.action_use_hold && a.action_lock_x == b.action_lock_x && a.action_lock_y == b.action_lock_y && a.action_orientation == b.action_orientation && a.action_spin_type == b.action_spin_type && a.action_piece_type == b.action_piece_type && a.action_lines_cleared == b.action_lines_cleared && a.action_afterstate == b.action_afterstate;
     if (!same) { throw std::runtime_error{"resampled search root differs from the real env in its network input"}; }
+}
+#endif
+
+#if MODERNTETRIS_PLACEMENT
+// One simulation of chance-node search. The path alternates state nodes (the root,
+// then outcome nodes) and action nodes. The simulation replays one of this move's
+// sampled worlds from the root (the i-th visit of a root action uses world i mod
+// M, so every root action sees the same worlds in the same order), and after each
+// action the observation it revealed picks the outcome child: a known one is
+// followed, a new one becomes the leaf to evaluate. With one world this is the
+// single-sample search.
+std::vector<MCTSNode*> ZeroActor::chanceSelection()
+{
+    std::shared_ptr<MCTS> mcts = getMCTS();
+    MCTSNode* root = mcts->getRootNode();
+    std::vector<MCTSNode*> node_path{root};
+    if (root->isLeaf()) {
+        mcts_search_data_.env_transition_ = env_;
+        return node_path;
+    }
+    const int num_worlds = static_cast<int>(chance_worlds_.size());
+    MCTSNode* action_node = config::actor_use_gumbel ? gumbel_zero_.nextCandidate() : mcts->selectChild(root);
+    Environment env = chance_worlds_[static_cast<int>(action_node->getCount()) % num_worlds];
+    while (true) {
+        node_path.push_back(action_node);
+        env.act(action_node->getAction());
+        const uint64_t key = env.getObservationKey();
+
+        MCTSNode* outcome = nullptr;
+        for (int i = 0; i < action_node->getNumChildren() && !outcome; ++i) {
+            if (action_node->getChild(i)->getOutcomeKey() == key) { outcome = action_node->getChild(i); }
+        }
+        if (!outcome) { // at most one outcome per world
+            assert(action_node->getNumChildren() < num_worlds);
+            if (!action_node->hasChildSlots()) { action_node->setFirstChild(mcts->allocateNodes(num_worlds)); }
+            const int index = action_node->getNumChildren();
+            action_node->setNumChildren(index + 1);
+            outcome = action_node->getChild(index);
+            outcome->reset();
+            outcome->setAction(action_node->getAction());
+            outcome->setOutcomeKey(key);
+            node_path.push_back(outcome);
+            break;
+        }
+        node_path.push_back(outcome);
+        if (outcome->isLeaf()) { break; } // terminal, or its evaluation is still pending in this batch
+        action_node = mcts->selectChild(outcome);
+    }
+    mcts_search_data_.env_transition_ = std::move(env);
+    return node_path;
 }
 #endif
 

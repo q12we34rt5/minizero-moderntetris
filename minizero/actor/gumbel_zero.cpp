@@ -77,14 +77,20 @@ std::vector<MCTSNode*> GumbelZero::selection(const std::shared_ptr<MCTS>& mcts)
     if (mcts->getNumSimulation() == 0) {
         node_path = mcts->select();
     } else {
-        assert(candidates_.size() > 0);
-        sort(candidates_.begin(), candidates_.end(), [](const MCTSNode* lhs, const MCTSNode* rhs) {
-            return (lhs->getCount() < rhs->getCount() || (lhs->getCount() == rhs->getCount() && lhs->getPolicyLogit() > rhs->getPolicyLogit()));
-        });
-        node_path = mcts->selectFromNode(candidates_[0]);
+        node_path = mcts->selectFromNode(nextCandidate());
         node_path.insert(node_path.begin(), mcts->getRootNode());
     }
     return node_path;
+}
+
+// The root candidate the next simulation goes through: the least visited one.
+MCTSNode* GumbelZero::nextCandidate()
+{
+    assert(candidates_.size() > 0);
+    sort(candidates_.begin(), candidates_.end(), [](const MCTSNode* lhs, const MCTSNode* rhs) {
+        return (lhs->getCount() < rhs->getCount() || (lhs->getCount() == rhs->getCount() && lhs->getPolicyLogit() > rhs->getPolicyLogit()));
+    });
+    return candidates_[0];
 }
 
 void GumbelZero::sequentialHalving(const std::shared_ptr<MCTS>& mcts)

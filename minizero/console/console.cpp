@@ -49,7 +49,7 @@ void Console::initialize()
 {
     if (!network_) { network_ = createNetwork(config::nn_file_name, 0); }
     if (!actor_) {
-        uint64_t tree_node_size = static_cast<uint64_t>(config::actor_num_simulation + 1) * network_->getActionSize();
+        uint64_t tree_node_size = static_cast<uint64_t>(config::actor_num_simulation + 1) * (network_->getActionSize() + std::max(0, config::actor_mcts_chance_worlds));
         actor_ = actor::createActor(tree_node_size, network_);
     }
     actor_->setNetwork(network_);

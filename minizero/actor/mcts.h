@@ -39,6 +39,7 @@ public:
     inline void setPolicyNoise(float policy_noise) { policy_noise_ = policy_noise; }
     inline void setValue(float value) { value_ = value; }
     inline void setReward(float reward) { reward_ = reward; }
+    inline void setOutcomeKey(uint64_t outcome_key) { outcome_key_ = outcome_key; }
     inline void setFirstChild(MCTSNode* first_child) { TreeNode::setFirstChild(first_child); }
 
     // getter
@@ -52,6 +53,7 @@ public:
     inline float getPolicyNoise() const { return policy_noise_; }
     inline float getValue() const { return value_; }
     inline float getReward() const { return reward_; }
+    inline uint64_t getOutcomeKey() const { return outcome_key_; }
     inline virtual MCTSNode* getChild(int index) const override { return (index < num_children_ ? static_cast<MCTSNode*>(first_child_) + index : nullptr); }
 
     // Cached env at this node, populated when the node is expanded so future
@@ -73,6 +75,7 @@ protected:
     float policy_noise_;
     float value_;
     float reward_;
+    uint64_t outcome_key_; // chance-node search: observation an outcome node stands for
     std::unique_ptr<Environment> env_;
 };
 
@@ -107,6 +110,12 @@ public:
     virtual std::vector<MCTSNode*> selectFromNode(MCTSNode* start_node);
     virtual void expand(MCTSNode* leaf_node, const std::vector<ActionCandidate>& action_candidates);
     virtual void backup(const std::vector<MCTSNode*>& node_path, const float value, const float reward = 0.0f);
+    // Chance-node search: node_path alternates state nodes (the root, then outcome
+    // nodes) and action nodes. An action node keeps the mean reward of the outcomes
+    // it led to and the mean value of their states, so reward + discount * mean is
+    // still its expected Q; outcome nodes hold their state value and transition reward.
+    void backupWithChance(const std::vector<MCTSNode*>& node_path, const float value, const float reward);
+    MCTSNode* selectChild(const MCTSNode* node) const { return selectChildByPUCTScore(node); }
 
     inline MCTSNode* allocateNodes(int size) { return static_cast<MCTSNode*>(Tree::allocateNodes(size)); }
     inline int getNumSimulation() const { return getRootNode()->getCount(); }

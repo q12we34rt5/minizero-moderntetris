@@ -208,6 +208,12 @@ public:
     // real future. Everything the network sees at this state is unchanged.
     void resampleHiddenFuture(bool pieces = true, bool garbage = true, bool shared_garbage = true);
 
+    // Hash of everything the player can observe at this state (board, current,
+    // hold, preview, spin/b2b/combo state, pending garbage). Two states with the
+    // same key differ only in their unobservable future; chance-node search uses
+    // it to tell which outcome a sampled transition revealed.
+    std::uint64_t getObservationKey() const;
+
     // Free the cached BFS placement results. Each cached entry carries a full
     // PlacementSearchResult (including the BFS path and final State), so the
     // cache can grow to tens of KB; clearing it before snapshotting an env in

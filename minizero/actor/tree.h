@@ -39,6 +39,7 @@ public:
     virtual bool displayInTreeLog() const { return true; }
 
     inline bool isLeaf() const { return (num_children_ == 0); }
+    inline bool hasChildSlots() const { return first_child_ != nullptr; }
     inline void setAction(Action action) { action_ = action; }
     inline void setNumChildren(int num_children) { num_children_ = num_children; }
     inline void setFirstChild(TreeNode* first_child) { first_child_ = first_child; }
