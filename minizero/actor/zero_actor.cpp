@@ -47,16 +47,16 @@ void ZeroActor::resetSearch()
     privileged_phase_ = false;
     honest_action_id_ = -1;
     honest_policy_.clear();
-    if (useChanceNodes() && (!config::actor_mcts_resample_hidden_future || usePimcAggregation() || config::actor_mcts_privileged_value)) {
-        throw std::runtime_error{"actor_mcts_chance_worlds needs actor_mcts_resample_hidden_future and works without PIMC or privileged value"};
+    if (useChanceNodes() && (usePimcAggregation() || config::actor_mcts_privileged_value)) {
+        throw std::runtime_error{"chance-node search works without PIMC or privileged value"};
     }
     resampleSearchRootEnv();
     chance_worlds_.clear();
 #if MODERNTETRIS_PLACEMENT
     chance_info_.clear();
-    for (int i = 0; i < config::actor_mcts_chance_worlds; ++i) {
+    for (int i = 0; i < config::actor_mcts_chance_worlds; ++i) { // without resampling every world is the real one
         resampleSearchRootEnv();
-        chance_worlds_.push_back(*search_root_env_);
+        chance_worlds_.push_back(search_root_env_ ? *search_root_env_ : env_);
     }
 #endif
 }
