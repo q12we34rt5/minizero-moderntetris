@@ -43,6 +43,7 @@ void ZeroActor::resetSearch()
     pimc_count_.clear();
     pimc_vote_.clear();
     pimc_value_sum_ = 0;
+    pimc_root_noise_.clear();
     privileged_phase_ = false;
     honest_action_id_ = -1;
     honest_policy_.clear();
@@ -430,8 +431,12 @@ void ZeroActor::addNoiseToNodeChildren(MCTSNode* node)
         }
     } else if (config::actor_use_gumbel_noise) {
         std::vector<float> gumbel_noise = utils::Random::randGumbel(node->getNumChildren());
+        const bool shared = usePimcAggregation() && config::actor_mcts_pimc_shared_noise;
         for (int i = 0; i < node->getNumChildren(); ++i) {
             MCTSNode* child = node->getChild(i);
+            if (shared) { // the first determinization draws the noise, later ones reuse it
+                gumbel_noise[i] = pimc_root_noise_.emplace(child->getAction().getActionID(), gumbel_noise[i]).first->second;
+            }
             child->setPolicyNoise(gumbel_noise[i]);
             child->setPolicyLogit(child->getPolicyLogit() + gumbel_noise[i]);
         }

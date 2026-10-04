@@ -127,6 +127,7 @@ protected:
     std::unordered_map<int, double> pimc_count_;        // summed normalized visit counts
     std::unordered_map<int, double> pimc_vote_;         // moves each tree would have played
     double pimc_value_sum_ = 0;
+    std::unordered_map<int, float> pimc_root_noise_; // actor_mcts_pimc_shared_noise: root Gumbel noise by action id
     // Privileged-value bookkeeping: whether the real-future search is running, and
     // what the honest search decided and would have trained on.
     bool privileged_phase_ = false;
