@@ -313,6 +313,137 @@ std::uint64_t ModernTetrisPlacementEnv::getObservationKey() const
     return hash;
 }
 
+namespace {
+    // Bag range [begin, end) holding next[index]: next[0..count) is the unconsumed
+    // tail of one bag followed by one full bag.
+    std::pair<int, int> bagRange(int index, int count)
+    {
+        const int boundary = std::max(0, count - 7);
+        return index < boundary ? std::make_pair(0, boundary) : std::make_pair(boundary, count);
+    }
+} // namespace
+
+std::vector<PlacementChanceOutcome> ModernTetrisPlacementEnv::getChanceOutcomes(const ModernTetrisPlacementAction& action) const
+{
+    const engine::State& state = ctx_.state;
+    int count = 0;
+    while (count < 14 && state.next[count] != engine::PieceType::NONE) { ++count; }
+    const int visible = std::clamp(config::env_modern_tetris_num_preview_piece, 0, count);
+
+    // Pieces entering the preview: one per spawn, two when holding into an empty hold.
+    const bool use_hold = unpackPlacementId(action.getActionID()).use_hold;
+    const int num_reveals = (use_hold && state.hold == engine::PieceType::NONE) ? 2 : 1;
+    struct PieceBranch {
+        float probability;
+        std::array<engine::PieceType, 14> next;
+        std::array<engine::PieceType, 2> pieces;
+    };
+    std::vector<PieceBranch> branches(1);
+    branches[0].probability = 1.0f;
+    std::copy(state.next, state.next + 14, branches[0].next.begin());
+    int num_pieces = 0;
+    for (int t = 0; t < num_reveals && visible + t < count; ++t, ++num_pieces) {
+        const int index = visible + t;
+        const auto [begin, end] = bagRange(index, count);
+        const int first = std::max(index, begin);
+        std::vector<PieceBranch> grown;
+        for (const auto& branch : branches) {
+            // every unseen piece of this bag is equally likely to come next
+            for (int j = first; j < end; ++j) {
+                PieceBranch next_branch = branch;
+                std::swap(next_branch.next[index], next_branch.next[j]);
+                next_branch.pieces[t] = next_branch.next[index];
+                next_branch.probability /= static_cast<float>(end - first);
+                grown.push_back(next_branch);
+            }
+        }
+        branches = std::move(grown);
+    }
+
+    // Garbage landing on this lock draws one hole column per queue segment:
+    // lock a copy and count the draws it took from a known seed.
+    constexpr std::uint32_t kProbeSeed = 0x9e3779b9U;
+    ModernTetrisPlacementEnv locked = *this;
+    locked.ctx_.state.garbage_seed = kProbeSeed;
+    locked.rebuildLegalPlacements();
+    const CachedPlacement* found = nullptr;
+    for (const auto& cp : locked.cached_placements_) {
+        if (cp.action_id == action.getActionID()) { found = &cp; }
+    }
+    if (!found) { return {}; }
+    if (use_hold) { engine::step::step(&locked.ctx_, engine::step::Action::HOLD); }
+    for (const auto& pa : found->result.path) { engine::step::step(&locked.ctx_, placementActionToStepAction(pa)); }
+    engine::step::step(&locked.ctx_, engine::step::Action::HARD_DROP);
+    int num_holes = 0;
+    for (std::uint32_t seed = kProbeSeed; seed != locked.ctx_.state.garbage_seed; ++num_holes) {
+        if (num_holes == 4) { throw std::runtime_error{"chance outcomes: more than 4 garbage segments land at once"}; }
+        xorshift32(seed);
+    }
+    constexpr int kColumns = engine::BOARD_RIGHT - engine::BOARD_LEFT + 1;
+    int hole_combinations = 1;
+    for (int i = 0; i < num_holes; ++i) { hole_combinations *= kColumns; }
+
+    // Garbage arriving after the lock.
+    std::vector<std::pair<int, float>> arrivals{{0, 1.0f}};
+    if (config::env_modern_tetris_garbage_probability > 0.0f && locked.ctx_.state.is_alive) {
+        const float p = config::env_modern_tetris_garbage_probability;
+        const int lo = std::max(1, config::env_modern_tetris_garbage_min_lines);
+        const int hi = std::max(lo, config::env_modern_tetris_garbage_max_lines);
+        arrivals = {{0, 1.0f - p}};
+        for (int lines = lo; lines <= hi; ++lines) { arrivals.emplace_back(lines, p / static_cast<float>(hi - lo + 1)); }
+    }
+
+    std::vector<PlacementChanceOutcome> outcomes;
+    outcomes.reserve(branches.size() * hole_combinations * arrivals.size());
+    for (const auto& branch : branches) {
+        for (int combination = 0; combination < hole_combinations; ++combination) {
+            for (const auto& [lines, arrival_probability] : arrivals) {
+                PlacementChanceOutcome outcome;
+                outcome.num_pieces = num_pieces;
+                outcome.pieces = branch.pieces;
+                outcome.num_holes = num_holes;
+                for (int i = 0, rest = combination; i < num_holes; ++i, rest /= kColumns) { outcome.holes[i] = static_cast<std::int8_t>(rest % kColumns); }
+                outcome.garbage_lines = lines;
+                outcome.probability = branch.probability * arrival_probability / static_cast<float>(hole_combinations);
+                outcomes.push_back(outcome);
+            }
+        }
+    }
+    return outcomes;
+}
+
+bool ModernTetrisPlacementEnv::actWithOutcome(const ModernTetrisPlacementAction& action, const PlacementChanceOutcome& outcome)
+{
+    engine::State& state = ctx_.state;
+    int count = 0;
+    while (count < 14 && state.next[count] != engine::PieceType::NONE) { ++count; }
+    const int visible = std::clamp(config::env_modern_tetris_num_preview_piece, 0, count);
+    for (int t = 0; t < outcome.num_pieces; ++t) {
+        const int index = visible + t;
+        const auto [begin, end] = bagRange(index, count);
+        for (int j = std::max(index, begin); j < end; ++j) {
+            if (state.next[j] == outcome.pieces[t]) {
+                std::swap(state.next[index], state.next[j]);
+                break;
+            }
+        }
+        if (state.next[index] != outcome.pieces[t]) { throw std::runtime_error{"chance outcome piece is not in the bag"}; }
+    }
+    // A garbage seed whose next draws are the outcome's hole columns.
+    constexpr std::uint32_t kColumns = engine::BOARD_RIGHT - engine::BOARD_LEFT + 1;
+    for (bool matched = (outcome.num_holes == 0); !matched;) {
+        const std::uint32_t candidate = static_cast<std::uint32_t>(Random::randInt()) | 1U;
+        std::uint32_t seed = candidate;
+        matched = true;
+        for (int i = 0; i < outcome.num_holes && matched; ++i) { matched = (xorshift32(seed) % kColumns) == static_cast<std::uint32_t>(outcome.holes[i]); }
+        if (matched) { state.garbage_seed = candidate; }
+    }
+    garbage_seed_after_lock_ = 0U; // whatever comes after this lock stays unknown
+    forced_garbage_lines_ = outcome.garbage_lines;
+    placements_dirty_ = true;
+    return act(action);
+}
+
 bool ModernTetrisPlacementEnv::act(const ModernTetrisPlacementAction& action, bool with_chance /* = true */)
 {
     if (turn_ != Player::kPlayer1 || action.getPlayer() != Player::kPlayer1) { return false; }
@@ -353,7 +484,13 @@ bool ModernTetrisPlacementEnv::act(const ModernTetrisPlacementAction& action, bo
     // only counters pre-existing queue entries (new garbage waits until the
     // next placement's processGarbageAndCounterAttack). Deterministic from the
     // state's garbage_seed stream -- loader replay reconstructs it identically.
-    if (config::env_modern_tetris_garbage_probability > 0.0f && ctx_.state.is_alive) {
+    if (forced_garbage_lines_) {
+        if (*forced_garbage_lines_ > 0 && ctx_.state.is_alive) {
+            const int delay = std::max(0, config::env_modern_tetris_garbage_delay);
+            engine::addGarbage(&ctx_.state, static_cast<std::uint8_t>(std::min(*forced_garbage_lines_, 255)), static_cast<std::uint8_t>(std::min(delay, 255)));
+        }
+        forced_garbage_lines_.reset();
+    } else if (config::env_modern_tetris_garbage_probability > 0.0f && ctx_.state.is_alive) {
         auto& seed = ctx_.state.garbage_seed;
         const float u = static_cast<float>(xorshift32(seed)) / static_cast<float>(std::numeric_limits<std::uint32_t>::max());
         if (u < config::env_modern_tetris_garbage_probability) {

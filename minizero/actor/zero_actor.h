@@ -18,6 +18,10 @@
 
 namespace minizero::actor {
 
+// Chance-node search: outcome nodes one action can grow (the most outcomes its
+// visits ever reach; later new outcomes fold into the visited ones).
+constexpr int kMaxChanceChildren = 64;
+
 class MCTSSearchData {
 public:
     std::string search_info_;
@@ -88,9 +92,17 @@ protected:
     // sampled per move, each simulation replays one of them from the root, and each
     // action branches on the observation it revealed. Worlds that look alike share
     // nodes; sibling actions are compared on the same worlds.
-    bool useChanceNodes() const { return config::actor_mcts_chance_worlds > 0; }
+    bool useChanceNodes() const { return config::actor_mcts_chance_worlds > 0 || config::actor_mcts_chance_nodes; }
 #if MODERNTETRIS_PLACEMENT
     std::vector<MCTSNode*> chanceSelection();
+    // actor_mcts_chance_nodes: one simulation through enumerated chance outcomes.
+    std::vector<MCTSNode*> chanceNodeSelection();
+    struct ChanceInfo {
+        std::vector<env::moderntetris_placement::PlacementChanceOutcome> outcomes;
+        std::vector<int> picks;          // times each outcome was descended into
+        std::vector<MCTSNode*> children; // its outcome node, once visited
+    };
+    std::unordered_map<const MCTSNode*, ChanceInfo> chance_info_;
 #endif
     void accumulatePimcSearch();
     void startNextPimcSearch();

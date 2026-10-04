@@ -53,6 +53,7 @@ void ZeroActor::resetSearch()
     resampleSearchRootEnv();
     chance_worlds_.clear();
 #if MODERNTETRIS_PLACEMENT
+    chance_info_.clear();
     for (int i = 0; i < config::actor_mcts_chance_worlds; ++i) {
         resampleSearchRootEnv();
         chance_worlds_.push_back(*search_root_env_);
@@ -172,7 +173,11 @@ void ZeroActor::beforeNNEvaluation()
     if (config::actor_mcts_privileged_value && !privileged_phase_ && getMCTS()->reachMaximumSimulation()) { startPrivilegedValueSearch(); }
 #if MODERNTETRIS_PLACEMENT
     // chanceSelection also leaves the leaf's env in env_transition_
-    mcts_search_data_.node_path_ = (placement_network_ && useChanceNodes()) ? chanceSelection() : selection();
+    if (placement_network_ && config::actor_mcts_chance_nodes) {
+        mcts_search_data_.node_path_ = chanceNodeSelection();
+    } else {
+        mcts_search_data_.node_path_ = (placement_network_ && useChanceNodes()) ? chanceSelection() : selection();
+    }
 #else
     mcts_search_data_.node_path_ = selection();
 #endif
@@ -559,6 +564,75 @@ std::vector<MCTSNode*> ZeroActor::chanceSelection()
     }
     mcts_search_data_.env_transition_ = std::move(env);
     return node_path;
+}
+#endif
+
+#if MODERNTETRIS_PLACEMENT
+// One simulation of chance-node search. Below each action the tree has one node
+// per outcome the lock can reveal, listed with its probability when the action is
+// first tried. The simulation descends into the outcome with the highest
+// probability / (times chosen + 1), so visits follow the probabilities, and
+// carries on from that outcome's own state: nothing below a node depends on a
+// future its state does not show.
+std::vector<MCTSNode*> ZeroActor::chanceNodeSelection()
+{
+    std::shared_ptr<MCTS> mcts = getMCTS();
+    MCTSNode* root = mcts->getRootNode();
+    std::vector<MCTSNode*> node_path{root};
+    if (root->isLeaf()) {
+        mcts_search_data_.env_transition_ = env_;
+        return node_path;
+    }
+    const Environment* state_env = &env_;
+    MCTSNode* node = root;
+    while (true) {
+        MCTSNode* action_node = (node == root && config::actor_use_gumbel) ? gumbel_zero_.nextCandidate() : mcts->selectChild(node);
+        node_path.push_back(action_node);
+        ChanceInfo& info = chance_info_[action_node];
+        if (info.outcomes.empty()) {
+            info.outcomes = state_env->getChanceOutcomes(action_node->getAction());
+            assert(!info.outcomes.empty());
+            info.picks.assign(info.outcomes.size(), 0);
+            info.children.assign(info.outcomes.size(), nullptr);
+            action_node->setFirstChild(mcts->allocateNodes(std::min<int>(info.outcomes.size(), kMaxChanceChildren)));
+        }
+        const int capacity = std::min<int>(info.outcomes.size(), kMaxChanceChildren);
+        const bool full = action_node->getNumChildren() == capacity;
+        int chosen = -1;
+        float best = -1.0f;
+        for (size_t i = 0; i < info.outcomes.size(); ++i) {
+            if (full && !info.children[i]) { continue; }
+            const float score = info.outcomes[i].probability / (info.picks[i] + 1);
+            if (score > best) {
+                best = score;
+                chosen = static_cast<int>(i);
+            }
+        }
+        ++info.picks[chosen];
+
+        MCTSNode* outcome = info.children[chosen];
+        if (!outcome) {
+            const int index = action_node->getNumChildren();
+            action_node->setNumChildren(index + 1);
+            outcome = action_node->getChild(index);
+            outcome->reset();
+            outcome->setAction(action_node->getAction());
+            outcome->setPolicy(info.outcomes[chosen].probability);
+            info.children[chosen] = outcome;
+            node_path.push_back(outcome);
+            Environment env = *state_env;
+            env.actWithOutcome(action_node->getAction(), info.outcomes[chosen]);
+            mcts_search_data_.env_transition_ = std::move(env);
+            return node_path;
+        }
+        node_path.push_back(outcome);
+        if (outcome->isLeaf()) { // terminal, or its evaluation is still pending in this batch
+            mcts_search_data_.env_transition_ = outcome->hasEnv() ? outcome->getEnv() : *state_env;
+            return node_path;
+        }
+        state_env = &outcome->getEnv();
+        node = outcome;
+    }
 }
 #endif
 

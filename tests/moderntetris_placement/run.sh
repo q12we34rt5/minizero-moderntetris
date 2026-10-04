@@ -8,6 +8,9 @@
 #   test_afterstate nn_placement_afterstate_before_garbage makes the action
 #                   descriptors independent of garbage_seed without changing
 #                   the legal action set
+#   test_chance     getChanceOutcomes()/actWithOutcome(): probabilities sum to 1,
+#                   each outcome reveals what it says, outcomes are distinct,
+#                   and random play's outcome frequencies match the probabilities
 set -euo pipefail
 
 build=build/moderntetris_placement
@@ -15,7 +18,7 @@ out=$(mktemp -d)
 trap 'rm -rf "$out"' EXIT
 includes=$(find minizero -type d | sed 's/^/-I/' | tr '\n' ' ')
 status=0
-for t in test_resample test_afterstate; do
+for t in test_resample test_afterstate test_chance; do
     g++ -std=c++17 -O2 -DMODERNTETRIS_PLACEMENT=1 $includes "tests/moderntetris_placement/$t.cpp" \
         "$build/libenvironment.a" "$build/libconfig.a" "$build/libutils.a" \
         -lboost_system -lboost_thread -lboost_iostreams -lz -lpthread -o "$out/$t"

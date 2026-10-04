@@ -186,7 +186,7 @@ void ActorGroup::createActors()
     assert(getSharedData()->networks_.size() > 0);
     std::shared_ptr<Network>& network = getSharedData()->networks_[0];
     // chance-node search also allocates up to actor_mcts_chance_worlds outcome nodes per simulation
-    uint64_t tree_node_size = static_cast<uint64_t>(config::actor_num_simulation + 1) * (network->getActionSize() + std::max(0, config::actor_mcts_chance_worlds));
+    uint64_t tree_node_size = static_cast<uint64_t>(config::actor_num_simulation + 1) * (network->getActionSize() + std::max(0, config::actor_mcts_chance_worlds) + (config::actor_mcts_chance_nodes ? kMaxChanceChildren : 0));
     for (int i = 0; i < config::zero_num_parallel_games; ++i) {
         getSharedData()->actors_.emplace_back(createActor(tree_node_size, getSharedData()->networks_[i % getSharedData()->networks_.size()]));
     }

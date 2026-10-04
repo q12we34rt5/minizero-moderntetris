@@ -137,6 +137,18 @@ public:
     std::string toConsoleString() const override;
 };
 
+// One outcome of the randomness a placement reveals (chance-node search): the
+// pieces that enter the preview, the hole column of each garbage segment that
+// lands on this lock, and the garbage that arrives after it (0 lines = none).
+struct PlacementChanceOutcome {
+    float probability = 1.0f;
+    int num_pieces = 0;
+    std::array<engine::PieceType, 2> pieces{};
+    int num_holes = 0;
+    std::array<std::int8_t, 4> holes{};
+    int garbage_lines = 0;
+};
+
 class ModernTetrisPlacementEnv : public StochasticEnv<ModernTetrisPlacementAction> {
 public:
     ModernTetrisPlacementEnv() { reset(); }
@@ -214,6 +226,12 @@ public:
     // it to tell which outcome a sampled transition revealed.
     std::uint64_t getObservationKey() const;
 
+    // Chance-node search: every outcome the placement can reveal, with its
+    // probability given what this state shows, and act() with a chosen outcome
+    // instead of the env's own random draws. Probabilities sum to 1.
+    std::vector<PlacementChanceOutcome> getChanceOutcomes(const ModernTetrisPlacementAction& action) const;
+    bool actWithOutcome(const ModernTetrisPlacementAction& action, const PlacementChanceOutcome& outcome);
+
     // Free the cached BFS placement results. Each cached entry carries a full
     // PlacementSearchResult (including the BFS path and final State), so the
     // cache can grow to tens of KB; clearing it before snapshotting an env in
@@ -248,6 +266,9 @@ private:
     // Garbage seed resampleHiddenFuture() swaps in after the next lock; 0 means
     // a fresh seed per lock.
     std::optional<std::uint32_t> garbage_seed_after_lock_;
+    // Set by actWithOutcome: the garbage arriving after the next lock (0 = none),
+    // in place of the garbage stream's draws.
+    std::optional<int> forced_garbage_lines_;
 };
 
 class ModernTetrisPlacementEnvLoader : public StochasticEnvLoader<ModernTetrisPlacementAction, ModernTetrisPlacementEnv> {
