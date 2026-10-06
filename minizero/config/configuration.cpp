@@ -24,6 +24,7 @@ bool actor_mcts_privileged_value = false;
 int actor_mcts_chance_worlds = 0;
 bool actor_mcts_pimc_shared_noise = false;
 bool actor_mcts_chance_nodes = false;
+bool actor_mcts_terminal_value_eval_score = false;
 std::string actor_mcts_resample_hidden_future_parts = "pieces,garbage";
 char actor_mcts_value_flipping_player = 'W';
 bool actor_select_action_by_count = false;
@@ -163,6 +164,7 @@ void setConfiguration(ConfigureLoader& cl)
     cl.addParameter("actor_mcts_pimc_aggregate", actor_mcts_pimc_aggregate, "how PIMC picks the move from its determinizations: vote (each tree decides as a single search would, the trees vote; identical to a single search with one determinization), policy (argmax of the averaged search policy) or count (argmax of summed normalized visit counts). The training target is always the averaged search policy", "Actor");
     cl.addParameter("actor_mcts_pimc_force", actor_mcts_pimc_force, "use the PIMC aggregation path even with a single determinization; a diagnostic that isolates the aggregation's decision rule from the extra futures", "Actor");
     cl.addParameter("actor_mcts_pimc_shared_noise", actor_mcts_pimc_shared_noise, "PIMC: every determinization of a move reuses the same root Gumbel noise, so the trees search the same root candidates and differ only in their sampled future", "Actor");
+    cl.addParameter("actor_mcts_terminal_value_eval_score", actor_mcts_terminal_value_eval_score, "placement env: back up the episode's total reward so far (getEvalScore) as a terminal leaf's value, the behavior before 2026-10-07 that made dying attractive late in a game; false backs up 0 like the training target", "Actor");
     cl.addParameter("actor_mcts_chance_nodes", actor_mcts_chance_nodes, "chance-node search: after each action the tree lists every outcome the lock can reveal (next preview pieces, landed garbage holes, arriving garbage) with its probability, and descends into the outcome with the highest probability / (visits + 1); no node ever sees a future its state does not show (placement env only)", "Actor");
     cl.addParameter("actor_mcts_chance_worlds", actor_mcts_chance_worlds, "chance-node search with common random numbers: >0 samples this many futures (worlds) per move; each visit of a root action replays one world in turn (visit i uses world i mod M) and the tree branches on the observation each step reveals, so worlds that look alike share nodes and sibling actions are compared on the same worlds; 1 is the single-sample search; 0 off; without actor_mcts_resample_hidden_future every world is the real future (placement env only)", "Actor");
     cl.addParameter("actor_mcts_privileged_value", actor_mcts_privileged_value, "critic-only privileged information: the move and the policy target come from the search on the resampled (honest) future, then a second search on the real future supplies only the recorded root value, i.e. the value target's bootstrap; requires actor_mcts_resample_hidden_future and a single determinization", "Actor");

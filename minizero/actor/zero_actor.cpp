@@ -240,10 +240,17 @@ void ZeroActor::afterNNEvaluation(const std::shared_ptr<NetworkOutput>& network_
             } else {
                 getMCTS()->backup(node_path, placement_output->value_, env_transition.getReward());
             }
-        } else if (useChanceNodes()) {
-            getMCTS()->backupWithChance(node_path, env_transition.getEvalScore(), env_transition.getReward());
         } else {
-            getMCTS()->backup(node_path, env_transition.getEvalScore(), env_transition.getReward());
+            // Nothing follows a terminal state: its value is 0, as in the training
+            // target, and the death penalty is already in its reward. getEvalScore()
+            // is the episode's total reward so far, which made dying look like a
+            // windfall late in a game (kept behind a flag to reproduce old runs).
+            const float terminal_value = config::actor_mcts_terminal_value_eval_score ? env_transition.getEvalScore() : 0.0f;
+            if (useChanceNodes()) {
+                getMCTS()->backupWithChance(node_path, terminal_value, env_transition.getReward());
+            } else {
+                getMCTS()->backup(node_path, terminal_value, env_transition.getReward());
+            }
         }
 #endif
     } else if (muzero_network_) {
