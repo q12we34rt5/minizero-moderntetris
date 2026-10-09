@@ -230,6 +230,9 @@ public:
     // probability given what this state shows, and act() with a chosen outcome
     // instead of the env's own random draws. Probabilities sum to 1.
     std::vector<PlacementChanceOutcome> getChanceOutcomes(const ModernTetrisPlacementAction& action) const;
+    // Versus play (arena): queue `lines` of garbage sent by an opponent; it lands
+    // after `delay` more locks under the engine's usual rules (counters, blocking).
+    void receiveGarbage(int lines, int delay);
     bool actWithOutcome(const ModernTetrisPlacementAction& action, const PlacementChanceOutcome& outcome);
 
     // Free the cached BFS placement results. Each cached entry carries a full

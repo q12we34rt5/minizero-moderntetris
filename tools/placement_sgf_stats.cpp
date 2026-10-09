@@ -44,6 +44,7 @@ struct Stats {
     int max_b2b = 0;
     // Player-facing measures, from the raw engine state rather than the shaped reward
     std::int64_t raw_attack = 0; // engine attack, summed (APP = raw_attack / placements)
+    std::vector<double> game_attack; // engine attack per game, for its standard error
     int b2b_clears = 0;          // clears that keep / start a back-to-back chain (tetris, any spin)
     int breaking_clears = 0;     // clears that break it (single/double/triple without a spin)
     std::vector<int> b2b_chains; // length of every finished chain, in qualifying clears
@@ -73,6 +74,15 @@ struct Stats {
     int deaths_after_garbage_spike = 0; // >= 3 garbage rows landed in one of the last 5 placements
     double height_before_death = 0;     // stack height 8 placements before the fatal one
     int deaths_with_history = 0;
+    // Perfect-clear attempts: runs of consecutive placements that leave a board
+    // that could still be perfect-cleared soon (not empty, at most 4 rows, no
+    // holes, no garbage). A run ending in a perfect clear is a success; one that
+    // lasted at least kPcAttemptMin placements and then broke the shape is a
+    // failed attempt (shorter runs are ordinary low-board play).
+    int pc_shaped_placements = 0;
+    int pc_attempt_success = 0;
+    int pc_attempt_failed = 0;
+    int pc_attempt_placements = 0; // placements spent inside counted attempts
     int reward_mismatches = 0; // placements where the env's reward differs from the recomputation
 };
 
@@ -249,6 +259,12 @@ void replayGame(const std::string& record, Stats& s, const RewardConfigs& cfgs)
     if (!std::regex_search(record, m, seed_re)) { return; }
     placement::ModernTetrisPlacementEnv env;
     env.reset(std::stoi(m[1].str()));
+    const std::int64_t attack_before = s.raw_attack;
+    struct GameAttack { // records this game's engine attack however replayGame returns
+        Stats& s;
+        std::int64_t before;
+        ~GameAttack() { s.game_attack.push_back(static_cast<double>(s.raw_attack - before)); }
+    } game_attack{s, attack_before};
     s.games++;
 
     struct Recent {
@@ -256,6 +272,8 @@ void replayGame(const std::string& record, Stats& s, const RewardConfigs& cfgs)
         int garbage_added;
     };
     std::vector<Recent> recent; // this game's placements so far
+    constexpr int kPcAttemptMin = 5;
+    int pc_run = 0;
     for (auto it = std::sregex_iterator(record.begin(), record.end(), action_re);
          it != std::sregex_iterator(); ++it) {
         const int action_id = std::stoi((*it)[1].str());
@@ -294,6 +312,21 @@ void replayGame(const std::string& record, Stats& s, const RewardConfigs& cfgs)
         // garbage rows that landed with this lock: garbage on the board after, minus
         // what was there before and survived the clear
         recent.push_back({pre_height, std::max(0, garbageRows(post) - pre_garbage)});
+        const int post_height = stackHeight(post);
+        if (post.perfect_clear || (post_height == 0 && post.lines_cleared > 0)) {
+            s.pc_attempt_success++;
+            s.pc_attempt_placements += pc_run + 1;
+            pc_run = 0;
+        } else if (post_height > 0 && post_height <= 4 && countHoles(post) == 0 && garbageRows(post) == 0) {
+            s.pc_shaped_placements++;
+            pc_run++;
+        } else {
+            if (pc_run >= kPcAttemptMin) {
+                s.pc_attempt_failed++;
+                s.pc_attempt_placements += pc_run;
+            }
+            pc_run = 0;
+        }
         if (!post.is_alive) {
             s.deaths_seen++;
             const int n = static_cast<int>(recent.size());
@@ -348,6 +381,17 @@ void report(const std::string& label, const Stats& s)
         chain_max = std::max(chain_max, c);
     }
     const int tspins = s.tspin[1] + s.tspin[2] + s.tspin[3];
+    double attack_se = 0.0;
+    if (s.game_attack.size() > 1) {
+        double mean = 0.0, var = 0.0;
+        for (double a : s.game_attack) { mean += a; }
+        mean /= s.game_attack.size();
+        for (double a : s.game_attack) { var += (a - mean) * (a - mean); }
+        var /= (s.game_attack.size() - 1);
+        attack_se = std::sqrt(var / s.game_attack.size());
+    }
+    std::printf("  attack per game %.1f +- %.1f (standard error over %zu games)\n",
+                s.raw_attack * per_game, attack_se, s.game_attack.size());
     std::printf("  APP %.3f (raw attack %.1f/game over %.1f pieces)\n",
                 s.placements > 0 ? static_cast<double>(s.raw_attack) / s.placements : 0.0,
                 s.raw_attack * per_game, s.placements * per_game);
@@ -369,6 +413,11 @@ void report(const std::string& label, const Stats& s)
                     kBucketNames[b], 100.0 * n / s.placements, k.search_value / n, k.policy_entropy / n,
                     k.holes_added / n, 100.0 * k.clears / n, k.height_change / n);
     }
+    const int pc_attempts = s.pc_attempt_success + s.pc_attempt_failed;
+    std::printf("  perfect-clear attempts: %.2f/game, %.1f%% succeed, %.1f placements each; PC-shaped boards %.1f%% of placements\n",
+                pc_attempts * per_game, pc_attempts > 0 ? 100.0 * s.pc_attempt_success / pc_attempts : 0.0,
+                pc_attempts > 0 ? static_cast<double>(s.pc_attempt_placements) / pc_attempts : 0.0,
+                s.placements > 0 ? 100.0 * s.pc_shaped_placements / s.placements : 0.0);
     std::printf("  deaths %d: %.1f%% had >=3 garbage rows land in the last 5 placements; stack 8 placements before death %.2f\n",
                 s.deaths_seen, s.deaths_seen > 0 ? 100.0 * s.deaths_after_garbage_spike / s.deaths_seen : 0.0,
                 s.deaths_with_history > 0 ? s.height_before_death / s.deaths_with_history : 0.0);

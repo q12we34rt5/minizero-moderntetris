@@ -1,5 +1,6 @@
 #include "mode_handler.h"
 #include "actor_group.h"
+#include "arena.h"
 #include "console.h"
 #include "git_info.h"
 #include "obs_recover.h"
@@ -18,6 +19,7 @@ ModeHandler::ModeHandler()
 {
     RegisterFunction("console", this, &ModeHandler::runConsole);
     RegisterFunction("sp", this, &ModeHandler::runSelfPlay);
+    RegisterFunction("arena", this, &ModeHandler::runArena);
     RegisterFunction("zero_server", this, &ModeHandler::runZeroServer);
     RegisterFunction("zero_training_name", this, &ModeHandler::runZeroTrainingName);
     RegisterFunction("env_test", this, &ModeHandler::runEnvTest);
@@ -144,6 +146,12 @@ void ModeHandler::runSelfPlay()
 {
     actor::ActorGroup ag;
     ag.run();
+}
+
+void ModeHandler::runArena()
+{
+    Arena arena;
+    arena.run();
 }
 
 void ModeHandler::runZeroServer()

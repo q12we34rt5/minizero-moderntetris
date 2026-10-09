@@ -44,6 +44,7 @@ protected:
     bool readConfiguration(config::ConfigureLoader& cl, const std::string& sConfigFile, const std::string& sConfigString);
     virtual void runConsole();
     virtual void runSelfPlay();
+    virtual void runArena();
     virtual void runZeroServer();
     virtual void runZeroTrainingName();
     virtual void runEnvTest();

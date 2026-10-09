@@ -412,6 +412,13 @@ std::vector<PlacementChanceOutcome> ModernTetrisPlacementEnv::getChanceOutcomes(
     return outcomes;
 }
 
+void ModernTetrisPlacementEnv::receiveGarbage(int lines, int delay)
+{
+    if (lines <= 0 || !ctx_.state.is_alive) { return; }
+    engine::addGarbage(&ctx_.state, static_cast<std::uint8_t>(std::min(lines, 255)), static_cast<std::uint8_t>(std::clamp(delay, 0, 255)));
+    placements_dirty_ = true;
+}
+
 bool ModernTetrisPlacementEnv::actWithOutcome(const ModernTetrisPlacementAction& action, const PlacementChanceOutcome& outcome)
 {
     engine::State& state = ctx_.state;
