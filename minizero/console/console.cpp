@@ -14,6 +14,7 @@
 #include <iomanip>
 #include <iostream>
 #include <sstream>
+#include <torch/cuda.h>
 #include <utility>
 
 namespace minizero::console {
@@ -47,7 +48,7 @@ Console::Console()
 
 void Console::initialize()
 {
-    if (!network_) { network_ = createNetwork(config::nn_file_name, 0); }
+    if (!network_) { network_ = createNetwork(config::nn_file_name, torch::cuda::device_count() > 0 ? 0 : -1); }
     if (!actor_) {
         uint64_t tree_node_size = static_cast<uint64_t>(config::actor_num_simulation + 1) * (network_->getActionSize() + std::max(0, config::actor_mcts_chance_worlds) + (config::actor_mcts_chance_nodes ? actor::kMaxChanceChildren : 0));
         actor_ = actor::createActor(tree_node_size, network_);

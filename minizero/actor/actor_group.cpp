@@ -172,12 +172,14 @@ void ActorGroup::initialize()
 
 void ActorGroup::createNeuralNetworks()
 {
-    int num_networks = std::min(static_cast<int>(torch::cuda::device_count()), config::zero_num_parallel_games);
+    // without a GPU, one network runs on the CPU (gpu id -1)
+    const int num_gpus = static_cast<int>(torch::cuda::device_count());
+    int num_networks = std::min(std::max(num_gpus, 1), config::zero_num_parallel_games);
     assert(num_networks > 0);
     getSharedData()->networks_.resize(num_networks);
     getSharedData()->network_outputs_.resize(num_networks);
     for (int gpu_id = 0; gpu_id < num_networks; ++gpu_id) {
-        getSharedData()->networks_[gpu_id] = createNetwork(config::nn_file_name, gpu_id);
+        getSharedData()->networks_[gpu_id] = createNetwork(config::nn_file_name, num_gpus > 0 ? gpu_id : -1);
     }
 }
 
