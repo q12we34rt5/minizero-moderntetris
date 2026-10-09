@@ -19,6 +19,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <random>
 #include <regex>
 #include <set>
@@ -39,7 +40,9 @@ namespace minizero::console {
 //   games=128          matches to play (match k uses piece/garbage seed seed*1000003+k
 //                      on both boards, so both players get the same pieces)
 //   parallel=64        matches in flight at once
-//   max_steps=500      pieces per player before the match is decided on garbage sent
+//   max_steps=0        pieces per player before the match is decided on garbage sent;
+//                      0 (the default) plays until someone tops out, with a safety cap
+//                      of kSafetyMaxSteps
 //   garbage_delay=4    locks before received garbage lands
 //   threads=16         CPU threads for the search bookkeeping
 //   seed=1
@@ -60,8 +63,10 @@ struct ArenaPlayerSpec {
     int procs = 8;
 };
 
+constexpr int kSafetyMaxSteps = 100000;
+
 struct ArenaSpec {
-    int games = 128, parallel = 64, max_steps = 500, garbage_delay = 4, threads = 16;
+    int games = 128, parallel = 64, max_steps = 0, garbage_delay = 4, threads = 16;
     unsigned seed = 1;
     std::string out = "arena-out";
     ArenaPlayerSpec player[2];
@@ -354,13 +359,15 @@ public:
     }
 
 private:
+    int stepCap() const { return spec_.max_steps > 0 ? spec_.max_steps : kSafetyMaxSteps; }
+
     void loadConfig(int p) const
     {
         const ArenaPlayerSpec& ps = spec_.player[p];
         config::ConfigureLoader cl;
         config::setConfiguration(cl);
         cl.loadFromFile(ps.type == "model" ? ps.cfg : rules_cfg_);
-        std::string conf = "env_modern_tetris_garbage_probability=0:env_modern_tetris_max_episode_steps=" + std::to_string(spec_.max_steps) +
+        std::string conf = "env_modern_tetris_garbage_probability=0:env_modern_tetris_max_episode_steps=" + std::to_string(stepCap()) +
                            ":actor_mcts_resample_hidden_future=true:actor_mcts_terminal_value_eval_score=false:program_quiet=true";
         if (ps.type == "model") { conf += ":nn_file_name=" + ps.model; }
         if (!ps.conf.empty()) { conf += ":" + ps.conf; }
@@ -426,14 +433,20 @@ private:
         parallelFor(procs, procs, [&](int b) {
             for (std::size_t k = b; k < active.size(); k += procs) {
                 ArenaMatch& m = wave[active[k]];
-                const std::string reply = bots_[p][b]->request(stateJson(m.env(p), active[k]));
+                const std::string request = stateJson(m.env(p), active[k]);
+                const std::string reply = bots_[p][b]->request(request);
                 ArenaExternalMove move = parseExternalMove(m.env(p), reply);
                 if (!move.ok) {
                     ++external_fallbacks_;
-                    if (external_fallbacks_ <= 5) { std::cerr << "arena: external move not legal here, falling back: " << reply << std::endl; }
+                    std::lock_guard<std::mutex> lock(mismatch_mutex_);
+                    std::ofstream(spec_.out + "/fallbacks.jsonl", std::ios::app) << "{\"request\":" << request << ",\"reply\":" << (reply.empty() ? std::string("null") : reply) << "}\n";
                     move.action = m.env(p).getLegalActions().front();
                 }
-                if (move.spin_mismatch) { ++spin_mismatches_; }
+                if (move.spin_mismatch) {
+                    ++spin_mismatches_;
+                    std::lock_guard<std::mutex> lock(mismatch_mutex_);
+                    std::ofstream(spec_.out + "/spin_mismatches.jsonl", std::ios::app) << "{\"request\":" << request << ",\"reply\":" << reply << "}\n";
+                }
                 m.chosen[p] = move.action;
             }
         });
@@ -462,7 +475,7 @@ private:
         if (dead0 || dead1) {
             m.winner = (dead0 && dead1) ? 2 : (dead0 ? 1 : 0);
             m.done = true;
-        } else if (m.steps >= spec_.max_steps) {
+        } else if (m.steps >= stepCap()) {
             m.winner = m.sent[0] > m.sent[1] ? 0 : (m.sent[1] > m.sent[0] ? 1 : 2);
             m.done = true;
         }
@@ -477,7 +490,7 @@ private:
         double steps = 0, sent[2] = {0, 0}, attack[2] = {0, 0};
         for (const ArenaMatch& m : matches) {
             ++wins[m.winner];
-            capped += m.steps >= spec_.max_steps;
+            capped += m.steps >= stepCap();
             steps += m.steps;
             for (int p = 0; p < 2; ++p) {
                 sent[p] += m.sent[p];
@@ -492,7 +505,7 @@ private:
         oss.precision(3);
         oss << "A: " << spec_.player[0].name << "\nB: " << spec_.player[1].name << "\n"
             << "matches " << matches.size() << ": A wins " << wins[0] << ", B wins " << wins[1] << ", draws " << wins[2]
-            << " (" << capped << " reached the " << spec_.max_steps << "-piece cap)\n"
+            << " (" << capped << " reached the " << stepCap() << "-piece cap" << (spec_.max_steps > 0 ? "" : ", the safety cap") << ")\n"
             << "A score " << score << " +- " << 1.96 * se << " (95%)\n"
             << "pieces per player " << steps / n << "; attack per piece A " << attack[0] / std::max(1.0, steps) << ", B " << attack[1] / std::max(1.0, steps)
             << "; lines sent per match A " << sent[0] / n << ", B " << sent[1] / n << "\n"
@@ -508,6 +521,7 @@ private:
     std::vector<std::unique_ptr<ArenaExternalBot>> bots_[2];
     std::atomic<std::int64_t> external_fallbacks_{0};
     std::atomic<std::int64_t> spin_mismatches_{0};
+    std::mutex mismatch_mutex_;
 };
 
 void Arena::run()
