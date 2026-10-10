@@ -69,6 +69,7 @@ extern int learner_training_display_step;
 extern int learner_batch_size;
 extern int learner_muzero_unrolling_step;
 extern int learner_n_step_return;
+extern bool learner_bootstrap_truncation;
 extern std::string learner_optimizer;
 extern float learner_learning_rate;
 extern float learner_momentum;

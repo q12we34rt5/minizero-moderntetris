@@ -864,9 +864,13 @@ float ModernTetrisPlacementEnvLoader::calculateNStepValue(const int pos) const
 
     const int n_step = config::learner_n_step_return;
     const float discount = config::actor_mcts_reward_discount;
-    const size_t bootstrap_index = pos + n_step;
+    size_t bootstrap_index = pos + n_step;
+    // The step cap is not part of the observation, so a cut-off episode is not a
+    // terminal state: optionally bootstrap from the last position's search value.
+    const bool truncated = config::learner_bootstrap_truncation && static_cast<int>(action_pairs_.size()) >= config::env_modern_tetris_max_episode_steps;
+    if (truncated && bootstrap_index >= action_pairs_.size()) { bootstrap_index = action_pairs_.size() - 1; }
     float value = 0.0f;
-    const float n_step_value = (bootstrap_index < action_pairs_.size()) ? std::pow(discount, n_step) * BaseEnvLoader::getValue(bootstrap_index)[0] : 0.0f;
+    const float n_step_value = (bootstrap_index < action_pairs_.size()) ? std::pow(discount, bootstrap_index - pos) * BaseEnvLoader::getValue(bootstrap_index)[0] : 0.0f;
     for (size_t index = pos; index < std::min(bootstrap_index, action_pairs_.size()); ++index) {
         value += std::pow(discount, index - pos) * BaseEnvLoader::getReward(index)[0];
     }
