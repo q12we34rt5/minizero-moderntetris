@@ -68,6 +68,8 @@ PYBIND11_MODULE(minizero_py, m)
     m.def("get_nn_placement_mlp_ratio", []() { return config::nn_placement_mlp_ratio; });
     m.def("get_nn_placement_dropout", []() { return config::nn_placement_dropout; });
     m.def("get_nn_placement_backbone", []() { return config::nn_placement_backbone; });
+    m.def("get_nn_placement_conv_channels", []() { return config::nn_placement_conv_channels; });
+    m.def("get_nn_placement_conv_layers", []() { return config::nn_placement_conv_layers; });
     m.def("get_nn_placement_use_afterstate_feature", []() { return config::nn_placement_use_afterstate_feature; });
     m.def("get_env_modern_tetris_num_preview_piece", []() { return config::env_modern_tetris_num_preview_piece; });
 

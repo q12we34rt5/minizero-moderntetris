@@ -88,6 +88,8 @@ int nn_placement_n_heads = 6;
 int nn_placement_mlp_ratio = 4;
 float nn_placement_dropout = 0.1f;
 std::string nn_placement_backbone = "transformer";
+int nn_placement_conv_channels = 32;
+int nn_placement_conv_layers = 3;
 bool nn_placement_use_afterstate_feature = false;
 bool nn_placement_afterstate_before_garbage = false;
 
@@ -233,6 +235,8 @@ void setConfiguration(ConfigureLoader& cl)
     cl.addParameter("nn_placement_mlp_ratio", nn_placement_mlp_ratio, "placement transformer: FFN expansion ratio", "Network");
     cl.addParameter("nn_placement_dropout", nn_placement_dropout, "placement transformer: dropout", "Network");
     cl.addParameter("nn_placement_backbone", nn_placement_backbone, "placement backbone: transformer/mlp_flat/mlp_conv (mlp_* score each action independently)", "Network");
+    cl.addParameter("nn_placement_conv_channels", nn_placement_conv_channels, "placement mlp_conv: channels of each 3x3 board conv layer", "Network");
+    cl.addParameter("nn_placement_conv_layers", nn_placement_conv_layers, "placement mlp_conv: number of 3x3 board conv layers", "Network");
     cl.addParameter("nn_placement_use_afterstate_feature", nn_placement_use_afterstate_feature, "placement: attach a summary of the board AFTER each placement (column heights, holes, transitions, wells, top-out) to its action token", "Network");
     cl.addParameter("nn_placement_afterstate_before_garbage", nn_placement_afterstate_before_garbage, "placement: compute the afterstate summary before pending garbage lands, so it does not reveal the garbage hole column (which the player cannot know before placing); false reproduces older models", "Network");
 

@@ -187,6 +187,8 @@ class Model:
                 "mlp_ratio": py.get_nn_placement_mlp_ratio(),
                 "dropout": py.get_nn_placement_dropout(),
                 "backbone": py.get_nn_placement_backbone(),
+                "conv_channels": py.get_nn_placement_conv_channels(),
+                "conv_layers": py.get_nn_placement_conv_layers(),
                 "afterstate_feature_size": py.DataLoader.placement_afterstate_size(),
             }
         self.network = create_network(py.get_game_name(),

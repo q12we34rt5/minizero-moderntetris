@@ -90,6 +90,8 @@ extern int nn_placement_n_heads;
 extern int nn_placement_mlp_ratio;
 extern float nn_placement_dropout;
 extern std::string nn_placement_backbone;
+extern int nn_placement_conv_channels;
+extern int nn_placement_conv_layers;
 extern bool nn_placement_use_afterstate_feature;
 extern bool nn_placement_afterstate_before_garbage;
 
