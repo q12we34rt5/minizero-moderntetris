@@ -11,12 +11,16 @@ set -euo pipefail
 build=build/moderntetris_placement
 bin=$build/placement_sgf_stats
 src=tools/placement_sgf_stats.cpp
+# several evals may need a rebuild at once: build under a lock, then swap the binary in
+exec 9> "$build/.placement_sgf_stats.lock"
+flock 9
 if [[ ! -x $bin || $src -nt $bin || $build/libconfig.a -nt $bin || $build/libenvironment.a -nt $bin ]]; then
     includes=$(find minizero -type d | sed 's/^/-I/' | tr '\n' ' ')
     g++ -std=c++17 -O2 -DMODERNTETRIS_PLACEMENT=1 $includes "$src" \
         "$build/libenvironment.a" "$build/libconfig.a" "$build/libutils.a" \
-        -lboost_system -lboost_thread -lboost_iostreams -lz -lpthread -o "$bin"
+        -lboost_system -lboost_thread -lboost_iostreams -lz -lpthread -o "$bin.tmp.$$" && mv -f "$bin.tmp.$$" "$bin"
 fi
+flock -u 9
 
 if [[ ${1:-} == "--conf" ]]; then
     shift
