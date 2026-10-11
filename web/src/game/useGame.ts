@@ -63,6 +63,15 @@ export interface PveSettings {
   eveGarbageDelayB: number;
   /** EvE only: start both boards from the same seed (identical piece sequence). */
   eveSeedSync: boolean;
+  /**
+   * How the AI interval is counted:
+   *   'overlap' -- from when the request is sent, so the AI's thinking (and the
+   *                animation, squeezed into what is left) overlaps the interval;
+   *                a target PPS is reached whenever thinking is faster than it.
+   *   'after'   -- from when the previous piece locked: request -> result ->
+   *                animation -> wait the interval.
+   */
+  aiTimingMode: 'overlap' | 'after';
 }
 
 const DEFAULT_PVE: PveSettings = {
@@ -77,6 +86,7 @@ const DEFAULT_PVE: PveSettings = {
   eveAiIntervalMsB: 400,
   eveGarbageDelayB: 1,
   eveSeedSync: false,
+  aiTimingMode: 'overlap',
 };
 
 /** HTTP(S) base for the router's /models endpoint, derived from the ws(s):// URL. */
@@ -180,6 +190,7 @@ interface BoardRuntime {
   clock: BoardClock;
   pending: boolean; // an AI request is in flight
   lastRequest: number;
+  lastDone: number; // when this AI's previous piece locked (for aiTimingMode 'after')
   anim: AiAnim | null; // an AI move currently being animated
   aiInfo: Record<string, string>; // latest extra info from the AI backend (value/winloss/...)
   colors: ColorTracker; // piece colors of the locked cells (the engine board has none)
@@ -392,8 +403,8 @@ export function useGame(): UseGame {
         eb.dispose();
         return;
       }
-      boardA = { id: 'A', engine: ea, client: clientA, control: 'human', clock: newClock(), pending: false, lastRequest: 0, anim: null, aiInfo: {}, colors: new ColorTracker(), connectedUrl: null };
-      boardB = { id: 'B', engine: eb, client: clientB, control: 'none', clock: newClock(), pending: false, lastRequest: 0, anim: null, aiInfo: {}, colors: new ColorTracker(), connectedUrl: null };
+      boardA = { id: 'A', engine: ea, client: clientA, control: 'human', clock: newClock(), pending: false, lastRequest: 0, lastDone: 0, anim: null, aiInfo: {}, colors: new ColorTracker(), connectedUrl: null };
+      boardB = { id: 'B', engine: eb, client: clientB, control: 'none', clock: newClock(), pending: false, lastRequest: 0, lastDone: 0, anim: null, aiInfo: {}, colors: new ColorTracker(), connectedUrl: null };
 
       // Every board mutation the color plane cares about happens on a hard drop
       // (the engine locks pieces only in hardDrop()), so track around that step
@@ -426,12 +437,15 @@ export function useGame(): UseGame {
         if (lines > 0 && opponent.control !== 'none') opponent.engine.addGarbage(lines, garbageDelay(opponent));
       };
 
+      const HARD_DROP_FACTOR = 2.5; // the hard drop's beat, in animation steps
+
       // Request one AI placement, then play it out as an animation (see
       // advanceAnim) rather than snapping to the final position.
       const aiTick = (board: BoardRuntime, opponent: BoardRuntime, now: number) => {
         if (board.control !== 'ai' || board.client.status !== 'connected') return;
         if (board.pending || board.anim) return;
-        if (now - board.lastRequest < aiIntervalMs(board)) return;
+        const after = pveSettingsRef.current.aiTimingMode === 'after';
+        if (now - (after ? board.lastDone : board.lastRequest) < aiIntervalMs(board)) return;
         board.pending = true;
         board.lastRequest = now;
         const requestGen = gen;
@@ -459,13 +473,21 @@ export function useGame(): UseGame {
             }
             // Spread the animation over ~60% of the AI interval, capped at
             // 60ms/step. No lower bound: at AI Interval 0 this is 0ms/step, so
-            // the whole path applies in one frame (effectively a snap).
+            // the whole path applies in one frame (effectively a snap). When the
+            // interval counts from the request, the animation also has to fit in
+            // what is left of it, or it would push the next request back.
             const interval = aiIntervalMs(board);
+            const start = performance.now();
+            let span = interval * 0.6;
+            if (pveSettingsRef.current.aiTimingMode !== 'after') {
+              span = Math.min(span, Math.max(0, board.lastRequest + interval - start));
+            }
+            // the hard drop takes HARD_DROP_FACTOR steps' time
             board.anim = {
               actions: path,
               index: 0,
-              lastStepTime: performance.now(),
-              stepInterval: Math.min(60, Math.floor((interval * 0.6) / path.length)),
+              lastStepTime: start,
+              stepInterval: Math.min(60, Math.floor(span / (path.length - 1 + HARD_DROP_FACTOR))),
             };
           })
           .catch(() => {
@@ -476,7 +498,6 @@ export function useGame(): UseGame {
       // Play out an AI move one step-action per stepInterval. The final action
       // (HARD_DROP) gets a longer beat so the lock reads clearly. When it lands,
       // exchange garbage and check for a top-out.
-      const HARD_DROP_FACTOR = 2.5;
       const advanceAnim = (board: BoardRuntime, opponent: BoardRuntime, now: number) => {
         while (board.anim) {
           const anim = board.anim;
@@ -490,6 +511,7 @@ export function useGame(): UseGame {
           anim.lastStepTime += required;
           if (anim.index >= anim.actions.length) {
             board.anim = null;
+            board.lastDone = now;
             const av = board.engine.read();
             if (!board.clock.firstPiece) {
               board.clock.firstPiece = true;
@@ -587,6 +609,7 @@ export function useGame(): UseGame {
         boardA.clock = newClock();
         boardA.pending = false;
         boardA.lastRequest = 0;
+        boardA.lastDone = 0;
         boardA.anim = null;
         boardA.colors.reset();
 
@@ -596,6 +619,7 @@ export function useGame(): UseGame {
           boardB.clock = newClock();
           boardB.pending = false;
           boardB.lastRequest = 0;
+          boardB.lastDone = 0;
           boardB.anim = null;
           boardB.colors.reset();
         }

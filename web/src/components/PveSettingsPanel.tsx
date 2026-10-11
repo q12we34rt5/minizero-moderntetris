@@ -88,6 +88,21 @@ function TimingPair({
         />
       </div>
       <div className="setting-item">
+        <label htmlFor={`${idBase}-pps`}>Target PPS (= 1000 / interval)</label>
+        <input
+          id={`${idBase}-pps`}
+          type="number"
+          min={0}
+          step={0.1}
+          value={interval > 0 ? Math.round((1000 / interval) * 100) / 100 : ''}
+          placeholder="max"
+          onChange={(e) => {
+            const pps = parseFloat(e.target.value);
+            onInterval(String(Number.isFinite(pps) && pps > 0 ? Math.round(1000 / pps) : 0));
+          }}
+        />
+      </div>
+      <div className="setting-item">
         <label htmlFor={`${idBase}-garbage`}>Garbage Delay</label>
         <input
           id={`${idBase}-garbage`}
@@ -180,6 +195,18 @@ export function PveSettingsPanel({ mode, settings, onChange, models, aiStatusA, 
           onPick={(modelId) => onChange({ ...settings, pveModel: modelId })}
         />
       )}
+
+      <div className="controls-row" style={{ marginTop: 8 }}>
+        <label htmlFor="set-ai-timing">AI interval counts from</label>
+        <select
+          id="set-ai-timing"
+          value={settings.aiTimingMode}
+          onChange={(e) => onChange({ ...settings, aiTimingMode: e.target.value as PveSettings['aiTimingMode'] })}
+        >
+          <option value="overlap">request sent (thinking overlaps the wait)</option>
+          <option value="after">piece locked (request → result → wait)</option>
+        </select>
+      </div>
 
       {isEve && (
         <div className="controls-row" style={{ marginTop: 8 }}>
