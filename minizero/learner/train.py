@@ -190,6 +190,7 @@ class Model:
                 "conv_channels": py.get_nn_placement_conv_channels(),
                 "conv_layers": py.get_nn_placement_conv_layers(),
                 "afterstate_feature_size": py.DataLoader.placement_afterstate_size(),
+                "value_bin_width": py.get_nn_placement_value_bin_width(),
             }
         self.network = create_network(py.get_game_name(),
                                       py.get_nn_num_input_channels(),

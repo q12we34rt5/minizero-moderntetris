@@ -95,6 +95,7 @@ extern int nn_placement_conv_channels;
 extern int nn_placement_conv_layers;
 extern bool nn_placement_use_afterstate_feature;
 extern bool nn_placement_afterstate_before_garbage;
+extern float nn_placement_value_bin_width;
 
 // environment parameters
 extern int env_board_size;

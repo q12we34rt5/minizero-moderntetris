@@ -880,6 +880,7 @@ float ModernTetrisPlacementEnvLoader::calculateNStepValue(const int pos) const
 std::vector<float> ModernTetrisPlacementEnvLoader::toDiscreteValue(float value) const
 {
     std::vector<float> discrete_value(kModernTetrisPlacementDiscreteValueSize, 0.0f);
+    value /= config::nn_placement_value_bin_width; // in bins
     const int value_floor = std::floor(value);
     const int value_ceil = std::ceil(value);
     const int shift = kModernTetrisPlacementDiscreteValueSize / 2;

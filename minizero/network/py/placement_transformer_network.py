@@ -223,7 +223,8 @@ class PlacementTransformerNetwork(nn.Module):
                  dropout: float = 0.1,
                  num_value_hidden_channels: int = 256,
                  discrete_value_size: int = 601,
-                 afterstate_feature_size: int = 0):
+                 afterstate_feature_size: int = 0,
+                 value_bin_width: float = 1.0):
         super().__init__()
         self.game_name = game_name
         self.board_channels = board_channels
@@ -236,6 +237,9 @@ class PlacementTransformerNetwork(nn.Module):
         self.n_heads = n_heads
         self.n_layers = n_layers
         self.discrete_value_size = discrete_value_size
+        # the (h-transformed) value one discrete value bin covers; the C++ side reads it
+        # back through get_value_bin_width, so a model always decodes its own value
+        self.value_bin_width = float(value_bin_width)
         self.afterstate_feature_size = afterstate_feature_size
 
         self.patch_embed = BoardPatchEmbed(board_channels, board_height, board_width,
@@ -296,6 +300,10 @@ class PlacementTransformerNetwork(nn.Module):
     @torch.jit.export
     def get_discrete_value_size(self) -> int:
         return self.discrete_value_size
+
+    @torch.jit.export
+    def get_value_bin_width(self) -> float:
+        return self.value_bin_width
 
     @torch.jit.export
     def get_d_model(self) -> int:

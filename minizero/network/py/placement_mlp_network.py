@@ -86,7 +86,8 @@ class PlacementMLPNetwork(nn.Module):
                  num_conv_layers: int = 3,
                  num_value_hidden_channels: int = 256,
                  discrete_value_size: int = 601,
-                 afterstate_feature_size: int = 0):
+                 afterstate_feature_size: int = 0,
+                 value_bin_width: float = 1.0):
         super().__init__()
         assert board_encoder in ("flat", "conv"), board_encoder
         self.game_name = game_name
@@ -100,6 +101,9 @@ class PlacementMLPNetwork(nn.Module):
         self.d_model = d_model
         self.board_encoder_name = board_encoder
         self.discrete_value_size = discrete_value_size
+        # the (h-transformed) value one discrete value bin covers; the C++ side reads it
+        # back through get_value_bin_width, so a model always decodes its own value
+        self.value_bin_width = float(value_bin_width)
         # Lock anchors fall outside the visible board; the one-hot axes are offset
         # and widened to cover the real range (see LOCK_*_OFFSET in
         # placement_transformer_network.py). Same treatment in both backbones.
@@ -171,6 +175,10 @@ class PlacementMLPNetwork(nn.Module):
     @torch.jit.export
     def get_discrete_value_size(self) -> int:
         return self.discrete_value_size
+
+    @torch.jit.export
+    def get_value_bin_width(self) -> float:
+        return self.value_bin_width
 
     @torch.jit.export
     def get_d_model(self) -> int:

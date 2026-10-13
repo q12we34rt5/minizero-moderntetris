@@ -93,6 +93,7 @@ int nn_placement_conv_channels = 32;
 int nn_placement_conv_layers = 3;
 bool nn_placement_use_afterstate_feature = false;
 bool nn_placement_afterstate_before_garbage = false;
+float nn_placement_value_bin_width = 1.0f;
 
 // environment parameters
 int env_board_size = 0;
@@ -241,6 +242,7 @@ void setConfiguration(ConfigureLoader& cl)
     cl.addParameter("nn_placement_conv_layers", nn_placement_conv_layers, "placement mlp_conv: number of 3x3 board conv layers", "Network");
     cl.addParameter("nn_placement_use_afterstate_feature", nn_placement_use_afterstate_feature, "placement: attach a summary of the board AFTER each placement (column heights, holes, transitions, wells, top-out) to its action token", "Network");
     cl.addParameter("nn_placement_afterstate_before_garbage", nn_placement_afterstate_before_garbage, "placement: compute the afterstate summary before pending garbage lands, so it does not reveal the garbage hole column (which the player cannot know before placing); false reproduces older models", "Network");
+    cl.addParameter("nn_placement_value_bin_width", nn_placement_value_bin_width, "placement: the (h-transformed) value one discrete value bin covers; the bins are centered on 0, so the support is +-width*(size/2); 1 reproduces older models", "Network");
 
     // environment parameters
     cl.addParameter("env_board_size", env_board_size, "the size of board", "Environment");

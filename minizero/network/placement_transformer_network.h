@@ -144,6 +144,8 @@ public:
         game_name_ = network_.get_method("get_game_name")(dummy).toString()->string();
         network_type_name_ = network_.get_method("get_type_name")(dummy).toString()->string();
         discrete_value_size_ = network_.get_method("get_discrete_value_size")(dummy).toInt();
+        // models trained before the bin width was configurable have no such method: unit bins
+        value_bin_width_ = network_.find_method("get_value_bin_width") ? static_cast<float>(network_.get_method("get_value_bin_width")(dummy).toDouble()) : 1.0f;
         // Placement action space is variable N per state. These fields must not be
         // -1 because callers multiply them into tree-sizing arithmetic (overflow ->
         // bad_alloc). Set to safe upper bounds.
@@ -166,6 +168,7 @@ public:
         oss << "Game name: " << game_name_ << std::endl;
         oss << "Network type name: " << network_type_name_ << std::endl;
         oss << "Discrete value size: " << discrete_value_size_ << std::endl;
+        oss << "Value bin width: " << value_bin_width_ << std::endl;
         oss << "Network file name: " << network_file_name_ << std::endl;
         return oss.str();
     }
@@ -357,7 +360,7 @@ public:
                 for (int k = 0; k < discrete_value_size_; ++k) {
                     v += vrow[k] * static_cast<float>(start_value + k);
                 }
-                out->value_ = utils::invertValue(v);
+                out->value_ = utils::invertValue(v * value_bin_width_);
             }
             outputs.push_back(std::move(out));
         }
@@ -377,6 +380,7 @@ protected:
     }
 
     int batch_size_ = 0;
+    float value_bin_width_ = 1.0f; // h-transformed value per discrete value bin
     std::mutex mutex_;
     std::vector<PlacementNetworkInput> batch_inputs_;
 
