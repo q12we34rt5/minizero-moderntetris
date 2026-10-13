@@ -1,6 +1,7 @@
 #include "mode_handler.h"
 #include "actor_group.h"
 #include "arena.h"
+#include "future_value.h"
 #include "console.h"
 #include "git_info.h"
 #include "obs_recover.h"
@@ -20,6 +21,7 @@ ModeHandler::ModeHandler()
     RegisterFunction("console", this, &ModeHandler::runConsole);
     RegisterFunction("sp", this, &ModeHandler::runSelfPlay);
     RegisterFunction("arena", this, &ModeHandler::runArena);
+    RegisterFunction("future_value", this, &ModeHandler::runFutureValue);
     RegisterFunction("zero_server", this, &ModeHandler::runZeroServer);
     RegisterFunction("zero_training_name", this, &ModeHandler::runZeroTrainingName);
     RegisterFunction("env_test", this, &ModeHandler::runEnvTest);
@@ -152,6 +154,12 @@ void ModeHandler::runArena()
 {
     Arena arena;
     arena.run();
+}
+
+void ModeHandler::runFutureValue()
+{
+    FutureValue future_value;
+    future_value.run();
 }
 
 void ModeHandler::runZeroServer()

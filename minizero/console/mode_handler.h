@@ -45,6 +45,7 @@ protected:
     virtual void runConsole();
     virtual void runSelfPlay();
     virtual void runArena();
+    virtual void runFutureValue();
     virtual void runZeroServer();
     virtual void runZeroTrainingName();
     virtual void runEnvTest();
