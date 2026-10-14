@@ -1,6 +1,7 @@
 #pragma once
 
 #include "alphazero_network.h"
+#include "configuration.h"
 #include "muzero_network.h"
 #include "network.h"
 #include "placement_transformer_network.h"
@@ -32,6 +33,7 @@ inline std::shared_ptr<Network> createNetwork(const std::string& nn_file_name, c
     } else if (type_name == "placement_transformer") {
         network = std::make_shared<PlacementTransformerNetwork>();
         std::dynamic_pointer_cast<PlacementTransformerNetwork>(network)->loadModel(nn_file_name, gpu_id);
+        std::dynamic_pointer_cast<PlacementTransformerNetwork>(network)->setValueReadout(config::actor_mcts_value_readout);
     } else {
         // should not be here
         assert(false);

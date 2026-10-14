@@ -13,6 +13,7 @@ int actor_num_simulation = 50;
 float actor_mcts_puct_base = 19652;
 float actor_mcts_puct_init = 1.25;
 float actor_mcts_reward_discount = 1.0f;
+std::string actor_mcts_value_readout = "mean";
 int actor_mcts_think_batch_size = 1;
 float actor_mcts_think_time_limit = 0;
 bool actor_mcts_value_rescale = false;
@@ -163,6 +164,7 @@ void setConfiguration(ConfigureLoader& cl)
     cl.addParameter("actor_mcts_puct_base", actor_mcts_puct_base, "hyperparameter for puct_bias in the PUCT formula of MCTS, determining the level of exploration", "Actor"); // ref: AZ, Sec. Methods
     cl.addParameter("actor_mcts_puct_init", actor_mcts_puct_init, "hyperparameter for puct_bias in the PUCT formula of MCTS", "Actor");                                       // ref: AZ, Sec. Methods
     cl.addParameter("actor_mcts_reward_discount", actor_mcts_reward_discount, "discount factor for calculating Q values", "Actor");                                           // ref: MZ, Sec. Methods
+    cl.addParameter("actor_mcts_value_readout", actor_mcts_value_readout, "placement: how the value distribution becomes the search value: mean, quantile_<q>, cvar_<a> (mean of the worst a share), lowmode (lowest mode when multimodal)", "Actor");
     cl.addParameter("actor_mcts_value_rescale", actor_mcts_value_rescale, "true for games whose rewards are not bounded in [-1, 1], e.g., Atari games", "Actor");             // ref: MZ
     cl.addParameter("actor_mcts_resample_hidden_future", actor_mcts_resample_hidden_future, "true to search from a copy of the root whose hidden randomness (unseen pieces, garbage) is resampled each move, so the search cannot see the real future; moderntetris_placement only", "Actor");
     cl.addParameter("actor_mcts_pimc_determinizations", actor_mcts_pimc_determinizations, "number of independently resampled futures searched per move (PIMC); each gets a full actor_num_simulation budget and the root statistics are averaged. 1 keeps a single search; only meaningful with actor_mcts_resample_hidden_future", "Actor");

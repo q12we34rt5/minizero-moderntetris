@@ -3,6 +3,7 @@
 #include "network.h"
 #include "utils.h"
 #include <algorithm>
+#include <cmath>
 #include <cassert>
 #include <cstring>
 #include <memory>
@@ -354,13 +355,7 @@ public:
             if (discrete_value_size_ == 1) {
                 out->value_ = value_output[i].item<float>();
             } else {
-                int start_value = -discrete_value_size_ / 2;
-                const float* vrow = value_output.data_ptr<float>() + i * discrete_value_size_;
-                float v = 0.0f;
-                for (int k = 0; k < discrete_value_size_; ++k) {
-                    v += vrow[k] * static_cast<float>(start_value + k);
-                }
-                out->value_ = utils::invertValue(v * value_bin_width_);
+                out->value_ = readValue(value_output.data_ptr<float>() + i * discrete_value_size_);
             }
             outputs.push_back(std::move(out));
         }
@@ -371,7 +366,122 @@ public:
 
     inline int getBatchSize() const { return batch_size_; }
 
+    // How a discrete value distribution becomes the value the search uses:
+    //   mean          its mean (in the h-transformed space, then inverted), the default
+    //   quantile_<q>  its q-quantile, e.g. quantile_0.2
+    //   cvar_<a>      the mean (in raw values) of its worst a share, e.g. cvar_0.2
+    //   lowmode       the mean (in raw values) of its lowest mode when it has two or
+    //                 more substantial modes (as experiments/value-dist/analyze.py
+    //                 finds them), otherwise its mean
+    void setValueReadout(const std::string& spec)
+    {
+        readout_ = ValueReadout::kMean;
+        readout_param_ = 0.0f;
+        if (spec.empty() || spec == "mean") { return; }
+        const auto colon = spec.find('_'); // not ":", which separates config entries
+        const std::string kind = spec.substr(0, colon);
+        const float param = colon == std::string::npos ? 0.0f : std::stof(spec.substr(colon + 1));
+        if (kind == "quantile") {
+            readout_ = ValueReadout::kQuantile;
+        } else if (kind == "cvar") {
+            readout_ = ValueReadout::kCvar;
+        } else if (kind == "lowmode") {
+            readout_ = ValueReadout::kLowMode;
+        } else {
+            std::cerr << "unknown value readout \"" << spec << "\", using the mean" << std::endl;
+            return;
+        }
+        readout_param_ = param;
+        assert(readout_ == ValueReadout::kLowMode || (param > 0.0f && param <= 1.0f));
+    }
+
 protected:
+    enum class ValueReadout { kMean,
+                              kQuantile,
+                              kCvar,
+                              kLowMode };
+
+    float readValue(const float* p) const
+    {
+        const int n = discrete_value_size_;
+        const int half = n / 2;
+        const float w = value_bin_width_;
+        if (readout_ == ValueReadout::kMean) {
+            int start_value = -half;
+            float v = 0.0f;
+            for (int k = 0; k < n; ++k) { v += p[k] * static_cast<float>(start_value + k); }
+            return utils::invertValue(v * w);
+        }
+        auto raw = [&](int k) { return utils::invertValue((k - half) * w); };
+        if (readout_ == ValueReadout::kQuantile) {
+            float cum = 0.0f;
+            for (int k = 0; k < n; ++k) {
+                cum += p[k];
+                if (cum >= readout_param_) { return raw(k); }
+            }
+            return raw(n - 1);
+        }
+        if (readout_ == ValueReadout::kCvar) {
+            float left = readout_param_, sum = 0.0f;
+            for (int k = 0; k < n && left > 0.0f; ++k) {
+                const float take = std::min(p[k], left);
+                sum += take * raw(k);
+                left -= take;
+            }
+            return sum / (readout_param_ - left);
+        }
+        // kLowMode: smooth over 0.25 of h, find peaks of density >= 0.03, split two peaks
+        // when the valley between them dips below half the smaller one, keep modes with
+        // at least 5% of the mass
+        const int win = w < 1.0f ? std::max(1, static_cast<int>(std::lround(0.25f / w))) : 1;
+        std::vector<float> s(n, 0.0f);
+        for (int k = 0; k < n; ++k) {
+            float acc = 0.0f;
+            int cnt = 0;
+            for (int j = k - win / 2; j < k - win / 2 + win; ++j) {
+                if (j >= 0 && j < n) { acc += p[j]; }
+                ++cnt;
+            }
+            s[k] = acc / cnt;
+        }
+        const float min_peak = 0.03f * w;
+        std::vector<int> peaks;
+        for (int k = 1; k + 1 < n; ++k) {
+            if (s[k] >= min_peak && s[k] > s[k - 1] && s[k] >= s[k + 1]) { peaks.push_back(k); }
+        }
+        std::vector<int> kept;
+        for (int k : peaks) {
+            if (kept.empty()) {
+                kept.push_back(k);
+                continue;
+            }
+            const int j = kept.back();
+            const float valley = *std::min_element(s.begin() + j, s.begin() + k + 1);
+            if (valley < 0.5f * std::min(s[j], s[k])) {
+                kept.push_back(k);
+            } else if (s[k] > s[j]) {
+                kept.back() = k;
+            }
+        }
+        if (kept.size() >= 2) {
+            // the lowest mode's basin ends at the valley to the next mode
+            int cut = kept[0];
+            for (int k = kept[0]; k <= kept[1]; ++k) {
+                if (s[k] < s[cut]) { cut = k; }
+            }
+            float mass = 0.0f, sum = 0.0f;
+            for (int k = 0; k < cut; ++k) {
+                mass += p[k];
+                sum += p[k] * raw(k);
+            }
+            if (mass >= 0.05f) { return sum / mass; }
+        }
+        int start_value = -half;
+        float v = 0.0f;
+        for (int k = 0; k < n; ++k) { v += p[k] * static_cast<float>(start_value + k); }
+        return utils::invertValue(v * w);
+    }
+
     inline void clear()
     {
         batch_size_ = 0;
@@ -381,6 +491,8 @@ protected:
 
     int batch_size_ = 0;
     float value_bin_width_ = 1.0f; // h-transformed value per discrete value bin
+    ValueReadout readout_ = ValueReadout::kMean;
+    float readout_param_ = 0.0f;
     std::mutex mutex_;
     std::vector<PlacementNetworkInput> batch_inputs_;
 

@@ -15,6 +15,7 @@ extern int actor_num_simulation;
 extern float actor_mcts_puct_base;
 extern float actor_mcts_puct_init;
 extern float actor_mcts_reward_discount;
+extern std::string actor_mcts_value_readout;
 extern int actor_mcts_think_batch_size;
 extern float actor_mcts_think_time_limit;
 extern bool actor_mcts_value_rescale;
