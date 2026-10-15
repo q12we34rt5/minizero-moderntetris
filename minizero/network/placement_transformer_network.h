@@ -3,8 +3,8 @@
 #include "network.h"
 #include "utils.h"
 #include <algorithm>
-#include <cmath>
 #include <cassert>
+#include <cmath>
 #include <cstring>
 #include <memory>
 #include <mutex>

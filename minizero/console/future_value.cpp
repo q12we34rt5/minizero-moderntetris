@@ -21,6 +21,7 @@
 #include <string>
 #include <thread>
 #include <torch/cuda.h>
+#include <utility>
 #include <vector>
 #endif
 
@@ -33,90 +34,90 @@ using EnvLoader = env::moderntetris_placement::ModernTetrisPlacementEnvLoader;
 
 namespace {
 
-// Parameters come from the environment so that no config key is added (a new
-// key would make older binaries reject every cfg generated afterwards):
-//   FV_SGF      game records (self-play or eval .sgf, one game per line)   required
-//   FV_OUT      output TSV                                                 required
-//   FV_K        hidden futures drawn per position                          32
-//   FV_GAMES    games used from FV_SGF                                     64
-//   FV_STRIDE   one position every FV_STRIDE moves (from FV_STRIDE/2)      20
-//   FV_TAIL     skip positions this close to the end of a record           12
-//   FV_WAVE     searches run together (one network batch per step)        1024
-//   FV_THREADS  CPU threads for the searches                               12
-//   FV_SEED     base seed of the futures                                   1
-// The search runs with the training cfg plus -conf_str; pass at least
-// nn_file_name=<pt>:actor_mcts_resample_hidden_future=false so the search sees
-// the drawn future, and actor_use_gumbel_noise=false so the futures are the only
-// source of spread.
-std::string envString(const char* name, const std::string& fallback)
-{
-    const char* v = std::getenv(name);
-    return (v && *v) ? std::string(v) : fallback;
-}
-
-int envInt(const char* name, int fallback) { return std::stoi(envString(name, std::to_string(fallback))); }
-
-// Runs fn(i) for i in [0, n) on `threads` threads; each worker gets its own Random seed.
-void parallelFor(int n, int threads, const std::function<void(int)>& fn)
-{
-    static std::atomic<unsigned> seed_counter{std::random_device{}()};
-    threads = std::max(1, std::min(threads, n));
-    std::vector<std::thread> workers;
-    for (int t = 0; t < threads; ++t) {
-        const unsigned seed = seed_counter.fetch_add(0x9e3779b9U);
-        workers.emplace_back([=, &fn] {
-            utils::Random::seed(static_cast<int>(seed));
-            for (int i = t; i < n; i += threads) { fn(i); }
-        });
+    // Parameters come from the environment so that no config key is added (a new
+    // key would make older binaries reject every cfg generated afterwards):
+    //   FV_SGF      game records (self-play or eval .sgf, one game per line)   required
+    //   FV_OUT      output TSV                                                 required
+    //   FV_K        hidden futures drawn per position                          32
+    //   FV_GAMES    games used from FV_SGF                                     64
+    //   FV_STRIDE   one position every FV_STRIDE moves (from FV_STRIDE/2)      20
+    //   FV_TAIL     skip positions this close to the end of a record           12
+    //   FV_WAVE     searches run together (one network batch per step)        1024
+    //   FV_THREADS  CPU threads for the searches                               12
+    //   FV_SEED     base seed of the futures                                   1
+    // The search runs with the training cfg plus -conf_str; pass at least
+    // nn_file_name=<pt>:actor_mcts_resample_hidden_future=false so the search sees
+    // the drawn future, and actor_use_gumbel_noise=false so the futures are the only
+    // source of spread.
+    std::string envString(const char* name, const std::string& fallback)
+    {
+        const char* v = std::getenv(name);
+        return (v && *v) ? std::string(v) : fallback;
     }
-    for (auto& w : workers) { w.join(); }
-}
 
-struct Position {
-    int game = 0;
-    int move = 0;
-    float recorded_value = 0.0f; // V[] of the record: the value of the search that was played
-    Env env;
-};
+    int envInt(const char* name, int fallback) { return std::stoi(envString(name, std::to_string(fallback))); }
 
-struct Job {
-    int position = 0;
-    int sample = 0; // 0: the record's real future; 1..K: drawn futures
-    Env env;
-    float root_value = 0.0f;
-    float nn_value = 0.0f;
-};
-
-std::vector<Position> loadPositions(const std::string& sgf, int games, int stride, int tail)
-{
-    std::vector<Position> positions;
-    std::ifstream in(sgf);
-    std::string line;
-    int game = 0;
-    while (game < games && std::getline(in, line)) {
-        if (line.rfind("(;GM", 0) != 0) { continue; }
-        EnvLoader loader;
-        if (!loader.loadFromString(line)) { continue; }
-        const auto& actions = loader.getActionPairs();
-        Env env;
-        env.reset(loader.getSeed());
-        for (int move = 0; move + tail < static_cast<int>(actions.size()); ++move) {
-            if (move >= stride / 2 && (move - stride / 2) % stride == 0 && !env.isTerminal()) {
-                Position p;
-                p.game = game;
-                p.move = move;
-                const auto it = actions[move].second.find("V");
-                p.recorded_value = it == actions[move].second.end() ? 0.0f : std::stof(it->second);
-                p.env = env;
-                p.env.shrinkPlacementCache();
-                positions.push_back(std::move(p));
-            }
-            env.act(actions[move].first);
+    // Runs fn(i) for i in [0, n) on `threads` threads; each worker gets its own Random seed.
+    void parallelFor(int n, int threads, const std::function<void(int)>& fn)
+    {
+        static std::atomic<unsigned> seed_counter{std::random_device{}()};
+        threads = std::max(1, std::min(threads, n));
+        std::vector<std::thread> workers;
+        for (int t = 0; t < threads; ++t) {
+            const unsigned seed = seed_counter.fetch_add(0x9e3779b9U);
+            workers.emplace_back([=, &fn] {
+                utils::Random::seed(static_cast<int>(seed));
+                for (int i = t; i < n; i += threads) { fn(i); }
+            });
         }
-        ++game;
+        for (auto& w : workers) { w.join(); }
     }
-    return positions;
-}
+
+    struct Position {
+        int game = 0;
+        int move = 0;
+        float recorded_value = 0.0f; // V[] of the record: the value of the search that was played
+        Env env;
+    };
+
+    struct Job {
+        int position = 0;
+        int sample = 0; // 0: the record's real future; 1..K: drawn futures
+        Env env;
+        float root_value = 0.0f;
+        float nn_value = 0.0f;
+    };
+
+    std::vector<Position> loadPositions(const std::string& sgf, int games, int stride, int tail)
+    {
+        std::vector<Position> positions;
+        std::ifstream in(sgf);
+        std::string line;
+        int game = 0;
+        while (game < games && std::getline(in, line)) {
+            if (line.rfind("(;GM", 0) != 0) { continue; }
+            EnvLoader loader;
+            if (!loader.loadFromString(line)) { continue; }
+            const auto& actions = loader.getActionPairs();
+            Env env;
+            env.reset(loader.getSeed());
+            for (int move = 0; move + tail < static_cast<int>(actions.size()); ++move) {
+                if (move >= stride / 2 && (move - stride / 2) % stride == 0 && !env.isTerminal()) {
+                    Position p;
+                    p.game = game;
+                    p.move = move;
+                    const auto it = actions[move].second.find("V");
+                    p.recorded_value = it == actions[move].second.end() ? 0.0f : std::stof(it->second);
+                    p.env = env;
+                    p.env.shrinkPlacementCache();
+                    positions.push_back(std::move(p));
+                }
+                env.act(actions[move].first);
+            }
+            ++game;
+        }
+        return positions;
+    }
 
 } // namespace
 

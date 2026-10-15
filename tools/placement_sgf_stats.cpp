@@ -43,15 +43,15 @@ struct Stats {
     int max_combo = 0;
     int max_b2b = 0;
     // Player-facing measures, from the raw engine state rather than the shaped reward
-    std::int64_t raw_attack = 0; // engine attack, summed (APP = raw_attack / placements)
+    std::int64_t raw_attack = 0;     // engine attack, summed (APP = raw_attack / placements)
     std::vector<double> game_attack; // engine attack per game, for its standard error
-    int b2b_clears = 0;          // clears that keep / start a back-to-back chain (tetris, any spin)
-    int breaking_clears = 0;     // clears that break it (single/double/triple without a spin)
-    std::vector<int> b2b_chains; // length of every finished chain, in qualifying clears
-    int t_pieces = 0;            // placements that locked a T
-    double height_sum = 0;       // stack height before each placement
-    double height_clear_sum = 0; // ... before each clearing placement
-    double height_combo_sum = 0; // ... before each clear that continued a combo
+    int b2b_clears = 0;              // clears that keep / start a back-to-back chain (tetris, any spin)
+    int breaking_clears = 0;         // clears that break it (single/double/triple without a spin)
+    std::vector<int> b2b_chains;     // length of every finished chain, in qualifying clears
+    int t_pieces = 0;                // placements that locked a T
+    double height_sum = 0;           // stack height before each placement
+    double height_clear_sum = 0;     // ... before each clearing placement
+    double height_combo_sum = 0;     // ... before each clear that continued a combo
     int combo_clears = 0;
     double attack_reward = 0;     // depth-weighted attack bucket (no survival/death term)
     double combo_part = 0;        // the part of it produced by attack_combo_weight
@@ -83,7 +83,7 @@ struct Stats {
     int pc_attempt_success = 0;
     int pc_attempt_failed = 0;
     int pc_attempt_placements = 0; // placements spent inside counted attempts
-    int reward_mismatches = 0; // placements where the env's reward differs from the recomputation
+    int reward_mismatches = 0;     // placements where the env's reward differs from the recomputation
 };
 
 // Reward configs that isolate one attack component: everything else is zeroed,

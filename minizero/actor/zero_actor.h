@@ -121,7 +121,10 @@ protected:
 #if MODERNTETRIS_PLACEMENT
     void checkSearchRootObservation() const;
 #endif
-    const Environment& getSearchRootEnv() const { return search_root_env_ ? *search_root_env_ : env_; }
+    const Environment& getSearchRootEnv() const
+    {
+        return search_root_env_ ? *search_root_env_ : env_;
+    }
 
     bool enable_resign_;
     GumbelZero gumbel_zero_;
